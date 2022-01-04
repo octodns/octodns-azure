@@ -27,12 +27,16 @@ setup(
     name='octodns-azure',
     packages=('octodns_azure',),
     python_requires='>=3.6',
-    install_requires=('octodns>=0.9.14', 'TODO: other requirements'),
+    install_requires=(
+        'azure-identity>=1.7.1',
+        'azure-mgmt-dns>=8.0.0',
+        'azure-mgmt-trafficmanager>=0.51.0',
+        'octodns>=0.9.14',
+    ),
     url='https://github.com/octodns/octodns-azure',
     version=version(),
     tests_require=[
         'nose',
         'nose-no-network',
-        'TODO: other test-time requirements'
     ],
 )

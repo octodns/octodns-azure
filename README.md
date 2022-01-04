@@ -1,5 +1,3 @@
-TODO: Review this README and add or modify as necessary.
-
 ## AzureProvider provider for octoDNS
 
 An [octoDNS](https://github.com/octodns/octodns/) provider that targets [Azure](https://azure.microsoft.com/en-us/services/dns/#overview).
@@ -38,21 +36,37 @@ octodns_azure==0.0.1
 providers:
   azure:
     class: octodns_azure.AzureProvider
-    # TODO
+    # Current support of authentication of access to Azure services only
+    # includes using a Service Principal:
+    # https://docs.microsoft.com/en-us/azure/azure-resource-manager/
+    #                        resource-group-create-service-principal-portal
+    # The Azure Active Directory Application ID (aka client ID):
+    client_id: env/AZURE_APPLICATION_ID
+    # Authentication Key Value: (note this should be secret)
+    key: env/AZURE_AUTHENTICATION_KEY
+    # Directory ID (aka tenant ID):
+    directory_id: env/AZURE_DIRECTORY_ID
+    # Subscription ID:
+    sub_id: env/AZURE_SUBSCRIPTION_ID
+    # Resource Group name:
+    resource_group: 'TestResource1'
+    # All are required to authenticate.
 ```
+
+The first four variables above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.
 
 ### Support Information
 
 #### Records
 
-TODO: All octoDNS record types are supported.
+AzureProvider supports A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, and TXT
 
 #### Dynamic
 
-TODO: AzureProvider does not support dynamic records.
+AzureProvider has beta supports dynamic records.
+
+Please read https://github.com/octodns/octodns/pull/706 for an overview of how dynamic records are designed and caveats of using them.
 
 ### Developement
 
 See the [/script/](/script/) directory for some tools to help with the development process. They generally follow the [Script to rule them all](https://github.com/github/scripts-to-rule-them-all) pattern. Most useful is `./script/bootstrap` which will create a venv and install both the runtime and development related requirements. It will also hook up a pre-commit hook that covers most of what's run by CI.
-
-TODO: any provider specific setup, a docker compose to run things locally etc?
