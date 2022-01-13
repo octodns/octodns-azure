@@ -288,19 +288,20 @@ def _pool_traffic_manager_name(pool, record):
 def _healthcheck_num_failures(record):
     return record._octodns.get('azuredns', {}) \
         .get('healthcheck', {}) \
-        .get('num_failures')
+        .get('num_failures', 3)
 
 
 def _healthcheck_interval(record):
     return record._octodns.get('azuredns', {}) \
         .get('healthcheck', {}) \
-        .get('interval')
+        .get('interval', 30)
 
 
 def _healthcheck_timeout(record):
+    default = 10 if _healthcheck_interval(record) > 10 else 9
     return record._octodns.get('azuredns', {}) \
         .get('healthcheck', {}) \
-        .get('timeout')
+        .get('timeout', default)
 
 
 def _get_monitor(record):

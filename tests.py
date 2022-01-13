@@ -467,9 +467,9 @@ class Test_ProfileIsMatch(TestCase):
             monitor_proto = 'HTTPS',
             monitor_port = 4443,
             monitor_path = '/_ping',
-            monitor_interval = None,
-            monitor_timeout = None,
-            monitor_num_failures = None,
+            monitor_interval = 30,
+            monitor_timeout = 10,
+            monitor_num_failures = 3,
             endpoints = 1,
             endpoint_name = 'name',
             endpoint_type = 'profile/nestedEndpoints',
@@ -651,6 +651,9 @@ class TestAzureDnsProvider(TestCase):
         header = MonitorConfigCustomHeadersItem(name='Host',
                                                 value='foo.unit.tests')
         monitor = MonitorConfig(protocol='HTTPS', port=4443, path='/_ping',
+                                tolerated_number_of_failures=3,
+                                interval_in_seconds=30,
+                                timeout_in_seconds=10,
                                 custom_headers=[header])
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
