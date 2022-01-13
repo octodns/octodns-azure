@@ -400,7 +400,7 @@ class Test_ParseAzureType(TestCase):
                                ['AAAA', 'Microsoft.Network/dnszones/AAAA'],
                                ['NS', 'Microsoft.Network/dnszones/NS'],
                                ['MX', 'Microsoft.Network/dnszones/MX']]:
-            self.assertEquals(expected, _parse_azure_type(test))
+            self.assertEqual(expected, _parse_azure_type(test))
 
 
 class Test_CheckEndswithDot(TestCase):
@@ -409,7 +409,7 @@ class Test_CheckEndswithDot(TestCase):
                                ['a.', 'a.'],
                                ['foo.bar.', 'foo.bar.'],
                                ['foo.bar.', 'foo.bar']]:
-            self.assertEquals(expected, _check_endswith_dot(test))
+            self.assertEqual(expected, _check_endswith_dot(test))
 
 
 class Test_RootTrafficManagerName(TestCase):
@@ -439,7 +439,7 @@ class Test_GetMonitor(TestCase):
         self.assertEqual(monitor.path, '/_ping')
         headers = monitor.custom_headers
         self.assertIsInstance(headers, list)
-        self.assertEquals(len(headers), 1)
+        self.assertEqual(len(headers), 1)
         headers = headers[0]
         self.assertEqual(headers.name, 'Host')
         self.assertEqual(headers.value, record.healthcheck_host())
@@ -897,7 +897,7 @@ class TestAzureDnsProvider(TestCase):
 
         exists = provider.populate(zone)
 
-        self.assertEquals(len(zone.records), 17)
+        self.assertEqual(len(zone.records), 17)
         self.assertTrue(exists)
 
     def test_populate_zone(self):
@@ -919,14 +919,14 @@ class TestAzureDnsProvider(TestCase):
         provider._populate_zones()
 
         # This should be returning two zones since two zones are the same
-        self.assertEquals(len(provider._azure_zones), 2)
+        self.assertEqual(len(provider._azure_zones), 2)
 
     def test_bad_zone_response(self):
         provider = self._get_provider()
 
         _get = provider._dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), 'Azure Error')
-        self.assertEquals(
+        self.assertEqual(
             provider._check_zone('unit.test', create=False),
             None
         )
@@ -2175,10 +2175,10 @@ class TestAzureDnsProvider(TestCase):
             [Update(r, r) for r in octo_records[half:]]
         deletes = [Delete(r) for r in octo_records]
 
-        self.assertEquals(expected_n, provider.apply(Plan(None, zone,
-                                                     changes, True)))
-        self.assertEquals(expected_n, provider.apply(Plan(zone, zone,
-                                                     deletes, True)))
+        self.assertEqual(expected_n, provider.apply(Plan(None, zone,
+                                                         changes, True)))
+        self.assertEqual(expected_n, provider.apply(Plan(zone, zone,
+                                                         deletes, True)))
 
     def test_apply_create_dynamic(self):
         provider = self._get_provider()
@@ -2437,8 +2437,8 @@ class TestAzureDnsProvider(TestCase):
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         expected_n = len(octo_records)
-        self.assertEquals(expected_n, provider.apply(Plan(None, desired,
-                                                          changes, True)))
+        self.assertEqual(expected_n, provider.apply(Plan(None, desired,
+                                                         changes, True)))
 
     def test_check_zone_no_create(self):
         provider = self._get_provider()
@@ -2463,4 +2463,4 @@ class TestAzureDnsProvider(TestCase):
         exists = provider.populate(Zone('unit3.test.', []))
         self.assertFalse(exists)
 
-        self.assertEquals(len(zone.records), 0)
+        self.assertEqual(len(zone.records), 0)

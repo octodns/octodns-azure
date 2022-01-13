@@ -27,7 +27,7 @@ octodns_azure==0.0.1
 ```
 # Start with the latest/specific versions and don't just copy what's here
 -e git+https://git@github.com/octodns/octodns.git@9da19749e28f68407a1c246dfdf65663cdc1c422#egg=octodns
--e git+https://git@github.com/octodns/octodns_azure.git@ec9661f8b335241ae4746eea467a8509205e6a30#egg=octodns_powerdns
+-e git+https://git@github.com/octodns/octodns_azure.git@ec9661f8b335241ae4746eea467a8509205e6a30#egg=octodns_azure
 ```
 
 ### Configuration
@@ -66,6 +66,28 @@ AzureProvider supports A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, and TXT
 AzureProvider has beta supports dynamic records.
 
 Please read https://github.com/octodns/octodns/pull/706 for an overview of how dynamic records are designed and caveats of using them.
+
+#### Healthchecks
+
+AzureProvider supports the following healthcheck options for dynamic records (from [official documentation](https://docs.microsoft.com/en-us/azure/traffic-manager/traffic-manager-monitoring#configure-endpoint-monitoring)):
+
+| Key | Description | Default |
+|--|--|--|
+| interval_in_seconds | This value specifies how often an endpoint is checked for its health from a Traffic Manager probing agent. You can specify two values here: 30 seconds (normal probing) and 10 seconds (fast probing). If no values are provided, the profile sets to a default value of 30 seconds. Visit the [Traffic Manager Pricing](https://azure.microsoft.com/pricing/details/traffic-manager) page to learn more about fast probing pricing. | 30 |
+| timeout_in_seconds | This property specifies the amount of time the Traffic Manager probing agent should wait before considering a health probe check to an endpoint a failure. If the Probing Interval is set to 30 seconds, then you can set the Timeout value between 5 and 10 seconds. If no value is specified, it uses a default value of 10 seconds. If the Probing Interval is set to 10 seconds, then you can set the Timeout value between 5 and 9 seconds. If no Timeout value is specified, it uses a default value of 9 seconds. | 10 or 9 |
+| tolerated_number_of_failures | This value specifies how many failures a Traffic Manager probing agent tolerates before marking that endpoint as unhealthy. Its value can range between 0 and 9. A value of 0 means a single monitoring failure can cause that endpoint to be marked as unhealthy. If no value is specified, it uses the default value of 3. | 3 |
+
+
+
+```
+---
+  octodns:
+    azuredns:
+      healthcheck:
+        interval_in_seconds: 10
+        timeout_in_seconds: 7
+        tolerated_number_of_failures: 4
+```
 
 ### Developement
 
