@@ -690,8 +690,8 @@ class AzureProvider(BaseProvider):
 
             # dynamic record alias is broken, return dummy value and apply
             # will likely overwrite/fix it
-            self.log.warn('_data_for_A: Missing Traffic Manager alias for '
-                          'dynamic record %s', azrecord.fqdn)
+            self.log.warning('_data_for_A: Missing Traffic Manager alias for '
+                             'dynamic record %s', azrecord.fqdn)
             return {'values': []}
 
         return {'values': [ar.ipv4_address for ar in azrecord.a_records]}
@@ -703,8 +703,8 @@ class AzureProvider(BaseProvider):
 
             # dynamic record alias is broken, return dummy value and apply
             # will likely overwrite/fix it
-            self.log.warn('_data_for_AAAA: Missing Traffic Manager alias for '
-                          'dynamic record %s', azrecord.fqdn)
+            self.log.warning('_data_for_AAAA: Missing Traffic Manager alias '
+                             'for dynamic record %s', azrecord.fqdn)
             return {'values': []}
 
         return {'values': [ar.ipv6_address for ar in azrecord.aaaa_records]}
@@ -728,8 +728,8 @@ class AzureProvider(BaseProvider):
 
             # dynamic record alias is broken, return dummy value and apply
             # will likely overwrite/fix it
-            self.log.warn('_data_for_CNAME: Missing Traffic Manager alias for '
-                          'dynamic record %s', azrecord.fqdn)
+            self.log.warning('_data_for_CNAME: Missing Traffic Manager alias '
+                             'for dynamic record %s', azrecord.fqdn)
             return {'value': None}
 
         return {'value': _check_endswith_dot(azrecord.cname_record.cname)}
