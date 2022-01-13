@@ -38,7 +38,9 @@ grep -r -I --line-number "# pragma: +no.*cover" $SOURCE_DIR && {
   exit 1
 }
 
-coverage run --branch --source=$SOURCE_DIR "$(command -v nosetests)" --with-no-network --with-xunit "$@"
+export PYTHONPATH=.:$PYTHONPATH
+
+coverage run --branch --source=$SOURCE_DIR "$(command -v pytest)" --disable-network "$@"
 coverage html
 coverage xml
 coverage report --show-missing
