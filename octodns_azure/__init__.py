@@ -285,22 +285,23 @@ def _pool_traffic_manager_name(pool, record):
     return f'{prefix}-pool-{pool}'
 
 
-def _healthcheck_tolerated_number_of_failures(record):
+def _healthcheck_num_failures(record):
     return record._octodns.get('azuredns', {}) \
         .get('healthcheck', {}) \
-        .get('tolerated_number_of_failures')
+        .get('num_failures', 3)
 
 
-def _healthcheck_interval_in_seconds(record):
+def _healthcheck_interval(record):
     return record._octodns.get('azuredns', {}) \
         .get('healthcheck', {}) \
-        .get('interval_in_seconds')
+        .get('interval', 30)
 
 
-def _healthcheck_timeout_in_seconds(record):
+def _healthcheck_timeout(record):
+    default = 10 if _healthcheck_interval(record) > 10 else 9
     return record._octodns.get('azuredns', {}) \
         .get('healthcheck', {}) \
-        .get('timeout_in_seconds')
+        .get('timeout', default)
 
 
 def _get_monitor(record):
@@ -308,10 +309,9 @@ def _get_monitor(record):
         protocol=record.healthcheck_protocol,
         port=record.healthcheck_port,
         path=record.healthcheck_path,
-        interval_in_seconds=_healthcheck_interval_in_seconds(record),
-        timeout_in_seconds=_healthcheck_timeout_in_seconds(record),
-        tolerated_number_of_failures=
-        _healthcheck_tolerated_number_of_failures(record),
+        interval_in_seconds=_healthcheck_interval(record),
+        timeout_in_seconds=_healthcheck_timeout(record),
+        tolerated_number_of_failures=_healthcheck_num_failures(record),
     )
     host = record.healthcheck_host()
     if host:
