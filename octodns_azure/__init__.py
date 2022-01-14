@@ -10,6 +10,7 @@ from azure.identity import ClientSecretCredential
 from azure.common.credentials import ServicePrincipalCredentials
 from azure.mgmt.dns import DnsManagementClient
 from azure.mgmt.trafficmanager import TrafficManagerManagementClient
+from azure.core.pipeline.policies import RetryPolicy
 
 from azure.mgmt.dns.models import ARecord, AaaaRecord, CaaRecord, \
     CnameRecord, MxRecord, SrvRecord, NsRecord, PtrRecord, TxtRecord, Zone
@@ -503,7 +504,7 @@ class AzureProvider(BaseProvider):
                     'TXT'))
 
     def __init__(self, id, client_id, key, directory_id, sub_id,
-                 resource_group, *args, **kwargs):
+                 resource_group, client_total_retries=10, client_status_retries=3, *args, **kwargs):
         self.log = getLogger(f'AzureProvider[{id}]')
         self.log.debug('__init__: id=%s, client_id=%s, '
                        'key=***, directory_id:%s', id, client_id, directory_id)
@@ -522,6 +523,11 @@ class AzureProvider(BaseProvider):
         self._azure_zones = set()
         self._traffic_managers = dict()
 
+        self._dns_client_retry_policy = RetryPolicy(
+                                            total_retries=client_total_retries,
+                                            status_retries=client_status_retries,
+                                        )
+
     @property
     def _dns_client(self):
         if self.__dns_client is None:
@@ -539,6 +545,7 @@ class AzureProvider(BaseProvider):
                     logger=logger,
                 ),
                 subscription_id=self._dns_client_subscription_id,
+                retry_policy=self._dns_client_retry_policy
             )
         return self.__dns_client
 
