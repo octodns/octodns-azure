@@ -34,8 +34,8 @@ SOURCE_DIR="octodns_azure/"
 
 # Don't allow disabling coverage
 grep -r -I --line-number "# pragma: +no.*cover" $SOURCE_DIR && {
-  echo "Code coverage should not be disabled"
-  exit 1
+    echo "Code coverage should not be disabled"
+    exit 1
 }
 
 export PYTHONPATH=.:$PYTHONPATH
