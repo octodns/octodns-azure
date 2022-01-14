@@ -54,9 +54,9 @@ providers:
     # Azure RetryPolicy Settings
     # https://azuresdkdocs.blob.core.windows.net/$web/python/azure-core/1.9.0/azure.core.pipeline.policies.html?highlight=retrypolicy#azure.core.pipeline.policies.RetryPolicy
     # Total_retries default 10
-    client_total_retries: 10
+    #client_total_retries: 10
     # status_retries default 3
-    client_status_retries: 3
+    #client_status_retries: 3
     # All are optional
 ```
 
