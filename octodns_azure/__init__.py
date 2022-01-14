@@ -504,10 +504,13 @@ class AzureProvider(BaseProvider):
                     'TXT'))
 
     def __init__(self, id, client_id, key, directory_id, sub_id,
-                 resource_group, client_total_retries=10, client_status_retries=3, *args, **kwargs):
+                 resource_group, client_total_retries=10,
+                 client_status_retries=3, *args, **kwargs):
         self.log = getLogger(f'AzureProvider[{id}]')
         self.log.debug('__init__: id=%s, client_id=%s, '
-                       'key=***, directory_id:%s', id, client_id, directory_id)
+                       'key=***, directory_id:%s, client_total_retries:%d, '
+                       'client_status_retries:%d', id, client_id, directory_id,
+                       client_total_retries, client_status_retries)
         super(AzureProvider, self).__init__(id, *args, **kwargs)
 
         # Store necessary initialization params
@@ -524,9 +527,9 @@ class AzureProvider(BaseProvider):
         self._traffic_managers = dict()
 
         self._dns_client_retry_policy = RetryPolicy(
-                                            total_retries=client_total_retries,
-                                            status_retries=client_status_retries,
-                                        )
+            total_retries=client_total_retries,
+            status_retries=client_status_retries
+        )
 
     @property
     def _dns_client(self):
