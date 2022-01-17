@@ -562,6 +562,7 @@ class AzureProvider(BaseProvider):
                     tenant=self._dns_client_directory_id,
                 ),
                 self._dns_client_subscription_id,
+                retry_policy=self._dns_client_retry_policy
             )
         return self.__tm_client
 
