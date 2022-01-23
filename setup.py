@@ -31,6 +31,8 @@ setup(
         'azure-identity>=1.7.1',
         'azure-mgmt-dns>=8.0.0',
         'azure-mgmt-trafficmanager>=0.51.0',
+        # Remove msrestazure if Azure/azure-sdk-for-python#22732 is resolved
+        'msrestazure>=0.6.4',
         'octodns>=0.9.14',
     ),
     url='https://github.com/octodns/octodns-azure',
