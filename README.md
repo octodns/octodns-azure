@@ -1,4 +1,4 @@
-## AzureProvider provider for octoDNS
+## Azure DNS & TrafficManager provider for octoDNS
 
 An [octoDNS](https://github.com/octodns/octodns/) provider that targets [Azure](https://azure.microsoft.com/en-us/services/dns/#overview).
 
