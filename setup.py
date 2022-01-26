@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 
 def descriptions():
@@ -25,7 +25,7 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     name='octodns-azure',
-    packages=('octodns_azure',),
+    packages=find_packages(),
     python_requires='>=3.6',
     install_requires=(
         'azure-identity>=1.7.1',
