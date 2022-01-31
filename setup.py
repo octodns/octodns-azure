@@ -17,16 +17,24 @@ def version():
 
 description, long_description = descriptions()
 
+tests_require = (
+    'pytest>=6.2.5',
+    'pytest-network>=0.0.1',
+)
+
 setup(
     author='Ross McFarland',
     author_email='rwmcfa1@gmail.com',
     description=description,
-    license='MIT',
-    long_description=long_description,
-    long_description_content_type='text/markdown',
-    name='octodns-azure',
-    packages=find_packages(),
-    python_requires='>=3.6',
+    extras_require={
+        'dev': tests_require + (
+            'build>=0.7.0',
+            'pycodestyle>=2.6.0',
+            'pyflakes>=2.2.0',
+            'readme_renderer[md]>=26.0',
+            'twine>=3.4.2',
+        ),
+    },
     install_requires=(
         'azure-identity>=1.7.1',
         'azure-mgmt-dns>=8.0.0',
@@ -34,10 +42,13 @@ setup(
         'msrestazure>=0.6.4',
         'octodns>=0.9.14',
     ),
+    license='MIT',
+    long_description=long_description,
+    long_description_content_type='text/markdown',
+    name='octodns-azure',
+    packages=find_packages(),
+    python_requires='>=3.6',
+    tests_require=tests_require,
     url='https://github.com/octodns/octodns-azure',
     version=version(),
-    tests_require=[
-        'pytest',
-        'pytest-network',
-    ],
 )
