@@ -1,4 +1,4 @@
-## AzureProvider provider for octoDNS
+## Azure DNS & TrafficManager provider for octoDNS
 
 An [octoDNS](https://github.com/octodns/octodns/) provider that targets [Azure](https://azure.microsoft.com/en-us/services/dns/#overview).
 
@@ -51,6 +51,12 @@ providers:
     # Resource Group name:
     resource_group: 'TestResource1'
     # All are required to authenticate.
+    # Azure RetryPolicy Settings all of them are optional.
+    # https://azuresdkdocs.blob.core.windows.net/$web/python/azure-core/1.9.0/azure.core.pipeline.policies.html?highlight=retrypolicy#azure.core.pipeline.policies.RetryPolicy
+    # Total_retries default 10
+    #client_total_retries: 10
+    # status_retries default 3
+    #client_status_retries: 3
 ```
 
 The first four variables above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.

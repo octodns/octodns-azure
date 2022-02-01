@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 
 def descriptions():
@@ -25,12 +25,13 @@ setup(
     long_description=long_description,
     long_description_content_type='text/markdown',
     name='octodns-azure',
-    packages=('octodns_azure',),
+    packages=find_packages(),
     python_requires='>=3.6',
     install_requires=(
         'azure-identity>=1.7.1',
         'azure-mgmt-dns>=8.0.0',
         'azure-mgmt-trafficmanager>=0.51.0',
+        'msrestazure>=0.6.4',
         'octodns>=0.9.14',
     ),
     url='https://github.com/octodns/octodns-azure',
