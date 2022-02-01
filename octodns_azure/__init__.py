@@ -7,7 +7,6 @@ from functools import reduce
 from logging import getLogger
 
 from azure.identity import ClientSecretCredential
-from azure.common.credentials import ServicePrincipalCredentials
 from azure.mgmt.dns import DnsManagementClient
 from azure.mgmt.trafficmanager import TrafficManagerManagementClient
 from azure.core.pipeline.policies import RetryPolicy
@@ -514,11 +513,12 @@ class AzureProvider(BaseProvider):
         super(AzureProvider, self).__init__(id, *args, **kwargs)
 
         # Store necessary initialization params
-        self._dns_client_handle = None
-        self._dns_client_client_id = client_id
-        self._dns_client_key = key
-        self._dns_client_directory_id = directory_id
-        self._dns_client_subscription_id = sub_id
+        self._client_client_id = client_id
+        self._client_key = key
+        self._client_directory_id = directory_id
+        self._client_subscription_id = sub_id
+        self.__client_credential = None
+
         self.__dns_client = None
         self.__tm_client = None
 
@@ -532,22 +532,28 @@ class AzureProvider(BaseProvider):
         )
 
     @property
-    def _dns_client(self):
-        if self.__dns_client is None:
+    def _client_credential(self):
+        if self.__client_credential is None:
             # Azure's logger spits out a lot of debug messages at 'INFO'
             # level, override it by re-assigning `info` method to `debug`
             # (ugly hack until I find a better way)
             logger_name = 'azure.core.pipeline.policies.http_logging_policy'
             logger = getLogger(logger_name)
             logger.info = logger.debug
+            self.__client_credential = ClientSecretCredential(
+                client_id=self._client_client_id,
+                client_secret=self._client_key,
+                tenant_id=self._client_directory_id,
+                logger=logger,
+            )
+        return self.__client_credential
+
+    @property
+    def _dns_client(self):
+        if self.__dns_client is None:
             self.__dns_client = DnsManagementClient(
-                credential=ClientSecretCredential(
-                    client_id=self._dns_client_client_id,
-                    client_secret=self._dns_client_key,
-                    tenant_id=self._dns_client_directory_id,
-                    logger=logger,
-                ),
-                subscription_id=self._dns_client_subscription_id,
+                credential=self._client_credential,
+                subscription_id=self._client_subscription_id,
                 retry_policy=self._dns_client_retry_policy
             )
         return self.__dns_client
@@ -556,12 +562,8 @@ class AzureProvider(BaseProvider):
     def _tm_client(self):
         if self.__tm_client is None:
             self.__tm_client = TrafficManagerManagementClient(
-                ServicePrincipalCredentials(
-                    self._dns_client_client_id,
-                    secret=self._dns_client_key,
-                    tenant=self._dns_client_directory_id,
-                ),
-                self._dns_client_subscription_id,
+                credential=self._client_credential,
+                subscription_id=self._client_subscription_id,
             )
         return self.__tm_client
 
@@ -622,7 +624,7 @@ class AzureProvider(BaseProvider):
         return self._traffic_managers.get(resource_id)
 
     def _profile_name_to_id(self, name):
-        return '/subscriptions/' + self._dns_client_subscription_id + \
+        return '/subscriptions/' + self._client_subscription_id + \
             '/resourceGroups/' + self._resource_group + \
             '/providers/Microsoft.Network/trafficManagerProfiles/' + \
             name
