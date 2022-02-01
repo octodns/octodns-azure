@@ -552,21 +552,16 @@ class Test_ProfileIsMatch(TestCase):
 
 
 class TestAzureDnsProvider(TestCase):
-    def _provider(self):
-        return self._get_provider('mock_spc', 'mock_dns_client')
-
     @patch('octodns_azure.TrafficManagerManagementClient')
     @patch('octodns_azure.DnsManagementClient')
     @patch('octodns_azure.ClientSecretCredential')
-    @patch('octodns_azure.ServicePrincipalCredentials')
-    def _get_provider(self, mock_spc, mock_css, mock_dns_client,
-                      mock_tm_client):
+    def _get_provider(self, mock_css, mock_client, mock_tm_client):
         '''Returns a mock AzureProvider object to use in testing.
 
             :param mock_spc: placeholder
             :type  mock_spc: str
-            :param mock_dns_client: placeholder
-            :type  mock_dns_client: str
+            :param mock_client: placeholder
+            :type  mock_client: str
             :param mock_tm_client: placeholder
             :type  mock_tm_client: str
 
@@ -639,7 +634,7 @@ class TestAzureDnsProvider(TestCase):
         })
 
     def _get_tm_profiles(self, provider):
-        sub = provider._dns_client_subscription_id
+        sub = provider._client_subscription_id
         rg = provider._resource_group
         base_id = '/subscriptions/' + sub + \
             '/resourceGroups/' + rg + \
@@ -1139,7 +1134,7 @@ class TestAzureDnsProvider(TestCase):
         profile = profile_gen(routing, endpoints, record, label)
 
         # implicitly tests _profile_name_to_id
-        sub = provider._dns_client_subscription_id
+        sub = provider._client_subscription_id
         rg = provider._resource_group
         expected_name = 'foo--unit--tests-rule-foobar'
         expected_id = '/subscriptions/' + sub + \
