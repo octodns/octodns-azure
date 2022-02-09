@@ -499,6 +499,7 @@ class AzureProvider(BaseProvider):
     SUPPORTS_DYNAMIC = True
     SUPPORTS_POOL_VALUE_STATUS = True
     SUPPORTS_MULTIVALUE_PTR = True
+    SUPPORTS_ROOT_NS = True
     SUPPORTS = set(('A', 'AAAA', 'CAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV',
                     'TXT'))
 
@@ -523,8 +524,10 @@ class AzureProvider(BaseProvider):
         self.__tm_client = None
 
         self._resource_group = resource_group
-        self._azure_zones = set()
         self._traffic_managers = dict()
+
+        self.__azure_zones = None
+        self.__required_root_ns_values = {}
 
         self._dns_client_retry_policy = RetryPolicy(
             total_retries=client_total_retries,
@@ -567,11 +570,17 @@ class AzureProvider(BaseProvider):
             )
         return self.__tm_client
 
-    def _populate_zones(self):
-        self.log.debug('azure_zones: loading')
-        list_zones = self._dns_client.zones.list_by_resource_group
-        for zone in list_zones(self._resource_group):
-            self._azure_zones.add(zone.name.rstrip('.'))
+    @property
+    def _azure_zones(self):
+        if self.__azure_zones is None:
+            self.log.debug('_azure_zones: loading')
+            zones = set()
+            list_zones = self._dns_client.zones.list_by_resource_group
+            for zone in list_zones(self._resource_group):
+                zones.add(zone.name.rstrip('.'))
+            self.__azure_zones = zones
+
+        return self.__azure_zones
 
     def _check_zone(self, name, create=False):
         '''Checks whether a zone specified in a source exist in Azure server.
@@ -596,6 +605,9 @@ class AzureProvider(BaseProvider):
             create_zone = self._dns_client.zones.create_or_update
             create_zone(self._resource_group, name, Zone(location='global'))
             self._azure_zones.add(name)
+            # force a reload of the required root NS values, after creating a
+            # new zone
+            self._required_root_ns_values(name, force=True)
             return name
         else:
             # Else return nothing (aka false)
@@ -667,7 +679,6 @@ class AzureProvider(BaseProvider):
         before = len(zone.records)
 
         zone_name = zone.name[:-1]
-        self._populate_zones()
 
         records = self._dns_client.record_sets.list_by_dns_zone
         if self._check_zone(zone_name):
@@ -950,10 +961,57 @@ class AzureProvider(BaseProvider):
 
         return data
 
+    def _required_root_ns_values(self, zone_name, force=False):
+        required_values = self.__required_root_ns_values.get(zone_name, None)
+        if required_values is None or force:
+            required_values = set()
+            if self._check_zone(zone_name):
+                records = self._dns_client.record_sets.list_by_dns_zone
+                for azrecord in records(self._resource_group, zone_name):
+                    if azrecord.name == '@' and \
+                            _parse_azure_type(azrecord.type) == 'NS':
+                        values = self._data_for_NS(azrecord)['values']
+                        required_values = set([v for v in values
+                                               if 'azure-dns' in v])
+            self.__required_root_ns_values[zone_name] = required_values
+
+        return required_values
+
+    def _ensure_required_root_ns_values(self, record):
+        '''
+        Make sure record includes the required root NS values (when known) and
+        if it doesn't return a `.copy` of the record which does. `modified` is
+        `False` when the record didn't need changing and `True` when it did.
+
+        Azure won't let you touch its 4 root NS values, you can add to them
+        though.
+        '''
+        modified = False
+        desired_values = set(record.values)
+        zone_name = record.zone.name[:-1]
+        all_values = desired_values | self._required_root_ns_values(zone_name)
+        if desired_values != all_values:
+            modified = True
+            record = record.copy()
+            record.values = sorted(all_values)
+
+        return record, modified
+
     def _process_desired_zone(self, desired):
         # check for status=up values
         for record in desired.records:
-            if not getattr(record, 'dynamic', False):
+            if record._type == 'NS' and record.name == '':
+                # We need to make sure the required root NS values are included
+                # in the desired state.
+                record, modified = self._ensure_required_root_ns_values(record)
+                if modified:
+                    msg = 'required azure-dns.* root NS values missing ' + \
+                        f'from {record.fqdn}'
+                    fallback = 'adding them'
+                    self.supports_warn_or_except(msg, fallback)
+                    desired.add_record(record, replace=True)
+                continue
+            elif not getattr(record, 'dynamic', False):
                 continue
 
             up_pools = []
@@ -1511,5 +1569,19 @@ class AzureProvider(BaseProvider):
 
         for change in changes:
             class_name = change.__class__.__name__
-            if class_name != 'Delete':
-                getattr(self, f'_apply_{class_name}')(change)
+            if class_name == 'Delete':
+                continue
+            new = change.new
+            if new._type == 'NS' and new.name == '':
+                # We have a change for the root NS record, make sure it
+                # includes the required NS values. In the case of creating a
+                # new zone we didn't know what they would be so they couldn't
+                # be included during _process_desired_zone. The zone was
+                # created above so they're now known
+                change.new, modified = \
+                    self._ensure_required_root_ns_values(new)
+                if modified:
+                    self.log.warning('_apply: required azure-dns.* root NS '
+                                     'values missing from {new.fqdn}; adding '
+                                     'them.')
+            getattr(self, f'_apply_{class_name}')(change)
