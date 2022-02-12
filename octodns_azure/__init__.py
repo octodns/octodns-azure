@@ -527,7 +527,7 @@ class AzureProvider(BaseProvider):
         self._traffic_managers = dict()
 
         self.__azure_zones = None
-        self.__required_root_ns_values = {}
+        self._required_root_ns_values = {}
 
         self._dns_client_retry_policy = RetryPolicy(
             total_retries=client_total_retries,
@@ -605,9 +605,20 @@ class AzureProvider(BaseProvider):
             create_zone = self._dns_client.zones.create_or_update
             create_zone(self._resource_group, name, Zone(location='global'))
             self._azure_zones.add(name)
-            # force a reload of the required root NS values, after creating a
-            # new zone
-            self._required_root_ns_values(name, force=True)
+
+            # we create the zone so we should now be able to get its root ns
+            # records, they should be one of only a couple things that exist at
+            # this point.
+            records = self._dns_client.record_sets.list_by_dns_zone
+            for azrecord in records(self._resource_group, name):
+                if azrecord.name == '@' and \
+                        _parse_azure_type(azrecord.type) == 'NS':
+                    values = self._data_for_NS(azrecord)['values']
+                    required_values = set([v for v in values
+                                           if 'azure-dns' in v])
+                    self._required_root_ns_values[name] = required_values
+                    break
+
             return name
         else:
             # Else return nothing (aka false)
@@ -690,6 +701,12 @@ class AzureProvider(BaseProvider):
 
                 record = self._populate_record(zone, azrecord, lenient)
                 zone.add_record(record, lenient=lenient)
+
+                if record._type == 'NS' and record.name == '':
+                    # we have the root NS record, record its azure-dns values
+                    required_values = set([v for v in record.values
+                                           if 'azure-dns' in v])
+                    self._required_root_ns_values[zone_name] = required_values
 
         self.log.info('populate: found %s records, exists=%s',
                       len(zone.records) - before, exists)
@@ -961,22 +978,6 @@ class AzureProvider(BaseProvider):
 
         return data
 
-    def _required_root_ns_values(self, zone_name, force=False):
-        required_values = self.__required_root_ns_values.get(zone_name, None)
-        if required_values is None or force:
-            required_values = set()
-            if self._check_zone(zone_name):
-                records = self._dns_client.record_sets.list_by_dns_zone
-                for azrecord in records(self._resource_group, zone_name):
-                    if azrecord.name == '@' and \
-                            _parse_azure_type(azrecord.type) == 'NS':
-                        values = self._data_for_NS(azrecord)['values']
-                        required_values = set([v for v in values
-                                               if 'azure-dns' in v])
-            self.__required_root_ns_values[zone_name] = required_values
-
-        return required_values
-
     def _ensure_required_root_ns_values(self, record):
         '''
         Make sure record includes the required root NS values (when known) and
@@ -989,7 +990,16 @@ class AzureProvider(BaseProvider):
         modified = False
         desired_values = set(record.values)
         zone_name = record.zone.name[:-1]
-        all_values = desired_values | self._required_root_ns_values(zone_name)
+        # We're assuming populate has already been called in which case we'll
+        # have the required root ns values cached
+        try:
+            required_values = self._required_root_ns_values[zone_name]
+        except KeyError:
+            required_values = set()
+            self.log.warning('_ensure_required_root_ns_values: required root '
+                             f'NS values for {zone_name} unavailable, likely '
+                             'a zone that has not been created yet')
+        all_values = desired_values | required_values
         if desired_values != all_values:
             modified = True
             record = record.copy()
