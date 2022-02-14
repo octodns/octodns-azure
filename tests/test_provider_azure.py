@@ -895,7 +895,7 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(len(zone.records), 17)
         self.assertTrue(exists)
 
-    def test_populate_zone(self):
+    def test_azure_zones(self):
         provider = self._get_provider()
 
         zone_list = provider._dns_client.zones.list_by_resource_group
@@ -911,7 +911,9 @@ class TestAzureDnsProvider(TestCase):
                                   zone_2,
                                   zone_1]
 
-        provider._populate_zones()
+        zones = provider._azure_zones
+        self.assertTrue(zone_1.name in zones)
+        self.assertTrue(zone_2.name in zones)
 
         # This should be returning two zones since two zones are the same
         self.assertEqual(len(provider._azure_zones), 2)
@@ -1774,8 +1776,14 @@ class TestAzureDnsProvider(TestCase):
             }
         })
         zone1.add_record(record1)
+        record_ns = Record.new(zone1, '', data={
+            'type': 'NS',
+            'ttl': 3600,
+            'values': ['ns1.azure-dns.org.', 'ns2.azur-dns.org.'],
+        })
+        zone1.add_record(record_ns)
         zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = list(zone2.records)[0]
+        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
         self.assertTrue(
             record2.dynamic.pools['one'].data['values'][0]['status'],
             'obey'
@@ -1803,8 +1811,9 @@ class TestAzureDnsProvider(TestCase):
         # supported
         zone1 = Zone(zone.name, sub_zones=[])
         zone1.add_record(record1)
+        zone1.add_record(record_ns)
         zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = list(zone2.records)[0]
+        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
         self.assertTrue(record1.data, record2.data)
 
         # simple records should not get changed by _process_desired_zone
@@ -1815,8 +1824,9 @@ class TestAzureDnsProvider(TestCase):
             'value': 'one.unit.tests.',
         })
         zone1.add_record(record1)
+        zone1.add_record(record_ns)
         zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = list(zone2.records)[0]
+        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
         self.assertTrue(record1.data, record2.data)
 
     def test_dynamic_A(self):
@@ -2195,6 +2205,40 @@ class TestAzureDnsProvider(TestCase):
         create = provider._dns_client.record_sets.create_or_update
         create.assert_called_once()
 
+    def test_apply_create_root_ns_management(self):
+        provider = self._get_provider()
+
+        tm_list = provider._tm_client.profiles.list_by_resource_group
+        tm_list.return_value = []
+
+        provider._required_root_ns_values['unit.tests'] = set((
+            'ns1-1.azure-dns.com.',
+            'ns1-1.azure-dns.info.',
+        ))
+
+        # modification required
+        record = Record.new(zone, '', data={
+            'ttl': 3600,
+            'type': 'NS',
+            'values': ('ns1.unit.tests.', 'ns2.unit.tests.'),
+        })
+
+        provider._apply_Create(Create(record))
+
+        create = provider._dns_client.record_sets.create_or_update
+        create.assert_called_once_with(
+            resource_group_name='mock_rg', zone_name='unit.tests',
+            relative_record_set_name='@', record_type='NS', parameters={
+                'ns_records': [
+                    NsRecord(nsdname='ns1-1.azure-dns.com.'),
+                    NsRecord(nsdname='ns1-1.azure-dns.info.'),
+                    NsRecord(nsdname='ns1.unit.tests.'),
+                    NsRecord(nsdname='ns2.unit.tests.'),
+                ],
+                'ttl': 3600,
+            },
+        )
+
     def test_apply_update_dynamic(self):
         # existing is simple, new is dynamic
         provider = self._get_provider()
@@ -2459,3 +2503,153 @@ class TestAzureDnsProvider(TestCase):
         self.assertFalse(exists)
 
         self.assertEqual(len(zone.records), 0)
+
+    def test_populate_caches_root_ns(self):
+        provider = self._get_provider()
+
+        # zone already exists
+        provider._azure_zones.add('unit.test')
+
+        rs = []
+
+        recordSet = \
+            RecordSet(ns_records=[
+                NsRecord(nsdname='ns1.unit.test.'),
+                NsRecord(nsdname='ns1-1.azure-dns.com.'),
+                NsRecord(nsdname='ns1-1.azure-dns.info.'),
+            ])
+        recordSet.name, recordSet.ttl, recordSet.type = '@', 9, 'NS'
+        rs.append(recordSet)
+
+        recordSet = RecordSet(ns_records=[NsRecord(nsdname='ns3.unit.test.')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'sub', 12, 'NS'
+        rs.append(recordSet)
+
+        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list.return_value = rs
+
+        # zone will exist and have a mixture of NS records
+        zone = Zone('unit.test.', [])
+        self.assertTrue(provider.populate(zone))
+        self.assertEqual({
+            'unit.test': set((
+                'ns1-1.azure-dns.com.',
+                'ns1-1.azure-dns.info.',
+            )),
+        }, provider._required_root_ns_values)
+
+    def test_check_zone_create_caches_root_ns(self):
+        provider = self._get_provider()
+
+        # w/o create we just don't find the zone
+        self.assertFalse(provider._check_zone('some.zone.com'))
+
+        rs = []
+
+        recordSet = \
+            RecordSet(ns_records=[
+                NsRecord(nsdname='ns1.unit.test.'),
+                NsRecord(nsdname='ns1-1.azure-dns.com.'),
+                NsRecord(nsdname='ns1-1.azure-dns.info.'),
+            ])
+        recordSet.name, recordSet.ttl, recordSet.type = '@', 9, 'NS'
+        rs.append(recordSet)
+
+        recordSet = RecordSet(ns_records=[NsRecord(nsdname='ns3.unit.test.')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'sub', 12, 'NS'
+        rs.append(recordSet)
+
+        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list.return_value = rs
+
+        # with create we'll fail to find it, create it, and grab it's root NS
+        # record values
+        self.assertTrue(provider._check_zone('unit.test', create=True))
+        self.assertEqual({
+            'unit.test': set((
+                'ns1-1.azure-dns.com.',
+                'ns1-1.azure-dns.info.',
+            )),
+        }, provider._required_root_ns_values)
+
+    def test_ensure_required_root_ns_values(self):
+        provider = self._get_provider()
+
+        # stuff some required values into the cache
+        required = set((
+            'ns1-1.azure-dns.com.',
+            'ns1-1.azure-dns.info.',
+        ))
+        provider._required_root_ns_values = {
+            'unit.test': required,
+        }
+
+        zone = Zone('unit.test.', [])
+
+        custom = set((
+            'ns1.unit.test.',
+            'ns2.unit.test.',
+        ))
+
+        # no required values
+        record = Record.new(zone, '', data={
+            'ttl': 4,
+            'type': 'NS',
+            'values': list(custom),
+        })
+        ret, modified = provider._ensure_required_root_ns_values(record)
+        self.assertTrue(modified)
+        self.assertEqual(required | custom, set(ret.values))
+        # make sure original record wasn't modified
+        self.assertEqual(2, len(record.values))
+        # same behavior with _process_desired_zone
+        zone.add_record(record, replace=True)
+        ret = provider._process_desired_zone(zone)
+        ret = list(ret.records)[0]
+        self.assertEqual(required | custom, set(ret.values))
+
+        # has partial required
+        record = Record.new(zone, '', data={
+            'ttl': 4,
+            'type': 'NS',
+            'values': list(custom) + list(required)[1:],
+        })
+        ret, modified = provider._ensure_required_root_ns_values(record)
+        self.assertTrue(modified)
+        self.assertEqual(required | custom, set(ret.values))
+        self.assertEqual(3, len(record.values))
+        # same behavior with _process_desired_zone
+        zone.add_record(record, replace=True)
+        ret = provider._process_desired_zone(zone)
+        ret = list(ret.records)[0]
+        self.assertEqual(required | custom, set(ret.values))
+
+        # has everything that's required
+        record = Record.new(zone, '', data={
+            'ttl': 4,
+            'type': 'NS',
+            'values': list(custom) + list(required),
+        })
+        ret, modified = provider._ensure_required_root_ns_values(record)
+        # was not modified b/c it's already complete
+        self.assertFalse(modified)
+        # same behavior with _process_desired_zone
+        zone.add_record(record, replace=True)
+        ret = provider._process_desired_zone(zone)
+        # same object, no copy
+        self.assertEqual(id(zone), id(ret))
+
+        # has just the required
+        record = Record.new(zone, '', data={
+            'ttl': 4,
+            'type': 'NS',
+            'values': list(required),
+        })
+        ret, modified = provider._ensure_required_root_ns_values(record)
+        # was not modified b/c it's already complete
+        self.assertFalse(modified)
+        # same behavior with _process_desired_zone
+        zone.add_record(record, replace=True)
+        ret = provider._process_desired_zone(zone)
+        # same object, no copy
+        self.assertEqual(id(zone), id(ret))

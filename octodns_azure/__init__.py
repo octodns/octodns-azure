@@ -610,6 +610,7 @@ class AzureProvider(BaseProvider):
             # records, they should be one of only a couple things that exist at
             # this point.
             records = self._dns_client.record_sets.list_by_dns_zone
+            values = []
             for azrecord in records(self._resource_group, name):
                 if azrecord.name == '@' and \
                         _parse_azure_type(azrecord.type) == 'NS':
@@ -617,7 +618,6 @@ class AzureProvider(BaseProvider):
                     required_values = set([v for v in values
                                            if 'azure-dns' in v])
                     self._required_root_ns_values[name] = required_values
-                    break
 
             return name
         else:
@@ -1020,32 +1020,29 @@ class AzureProvider(BaseProvider):
                     fallback = 'adding them'
                     self.supports_warn_or_except(msg, fallback)
                     desired.add_record(record, replace=True)
-                continue
-            elif not getattr(record, 'dynamic', False):
-                continue
+            elif getattr(record, 'dynamic', False):
+                up_pools = []
+                for name, pool in record.dynamic.pools.items():
+                    for value in pool.data['values']:
+                        if value['status'] == 'up':
+                            # Azure only supports obey and down, not up
+                            up_pools.append(name)
+                            break
+                if not up_pools:
+                    continue
 
-            up_pools = []
-            for name, pool in record.dynamic.pools.items():
-                for value in pool.data['values']:
-                    if value['status'] == 'up':
-                        # Azure only supports obey and down, not up
-                        up_pools.append(name)
-                        break
-            if not up_pools:
-                continue
+                up_pools = ','.join(up_pools)
+                msg = f'status=up is not supported for pools {up_pools} in ' \
+                    f'{record.fqdn}'
+                fallback = 'will ignore it and respect the healthcheck'
+                self.supports_warn_or_except(msg, fallback)
 
-            up_pools = ','.join(up_pools)
-            msg = f'status=up is not supported for pools {up_pools} in ' \
-                f'{record.fqdn}'
-            fallback = 'will ignore it and respect the healthcheck'
-            self.supports_warn_or_except(msg, fallback)
-
-            record = record.copy()
-            for pool in record.dynamic.pools.values():
-                for value in pool.data['values']:
-                    if value['status'] == 'up':
-                        value['status'] = 'obey'
-            desired.add_record(record, replace=True)
+                record = record.copy()
+                for pool in record.dynamic.pools.values():
+                    for value in pool.data['values']:
+                        if value['status'] == 'up':
+                            value['status'] = 'obey'
+                desired.add_record(record, replace=True)
 
         return super()._process_desired_zone(desired)
 
@@ -1432,6 +1429,17 @@ class AzureProvider(BaseProvider):
         '''
         record = change.new
 
+        # When a zone is first created we won't have had the required root NS
+        # values early on enough to deal with them in _process_desired_zone. We
+        # therefore have to do a secondary check here to make sure we're ok,
+        # if this change is for the root NS record.
+        if record._type == 'NS' and record.name == '':
+            record, modified = self._ensure_required_root_ns_values(record)
+            if modified:
+                self.log.warning('_apply: required azure-dns.* root NS '
+                                 'values missing from {new.fqdn}; adding '
+                                 'them.')
+
         dynamic = getattr(record, 'dynamic', False)
         root_profile = None
         endpoints = []
@@ -1581,17 +1589,4 @@ class AzureProvider(BaseProvider):
             class_name = change.__class__.__name__
             if class_name == 'Delete':
                 continue
-            new = change.new
-            if new._type == 'NS' and new.name == '':
-                # We have a change for the root NS record, make sure it
-                # includes the required NS values. In the case of creating a
-                # new zone we didn't know what they would be so they couldn't
-                # be included during _process_desired_zone. The zone was
-                # created above so they're now known
-                change.new, modified = \
-                    self._ensure_required_root_ns_values(new)
-                if modified:
-                    self.log.warning('_apply: required azure-dns.* root NS '
-                                     'values missing from {new.fqdn}; adding '
-                                     'them.')
             getattr(self, f'_apply_{class_name}')(change)
