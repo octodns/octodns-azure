@@ -2544,23 +2544,10 @@ class TestAzureDnsProvider(TestCase):
         # w/o create we just don't find the zone
         self.assertFalse(provider._check_zone('some.zone.com'))
 
-        rs = []
-
-        recordSet = \
-            RecordSet(ns_records=[
-                NsRecord(nsdname='ns1.unit.test.'),
-                NsRecord(nsdname='ns1-1.azure-dns.com.'),
-                NsRecord(nsdname='ns1-1.azure-dns.info.'),
-            ])
-        recordSet.name, recordSet.ttl, recordSet.type = '@', 9, 'NS'
-        rs.append(recordSet)
-
-        recordSet = RecordSet(ns_records=[NsRecord(nsdname='ns3.unit.test.')])
-        recordSet.name, recordSet.ttl, recordSet.type = 'sub', 12, 'NS'
-        rs.append(recordSet)
-
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
-        record_list.return_value = rs
+        test_zone = AzureZone(location='global')
+        test_zone.name_servers = ['ns1-1.azure-dns.com.',
+                                  'ns1-1.azure-dns.info.']
+        provider._dns_client.zones.create_or_update.return_value = test_zone
 
         # with create we'll fail to find it, create it, and grab it's root NS
         # record values

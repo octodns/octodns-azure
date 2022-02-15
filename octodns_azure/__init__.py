@@ -603,21 +603,13 @@ class AzureProvider(BaseProvider):
         if create:
             self.log.debug('_check_zone:no matching zone; creating %s', name)
             create_zone = self._dns_client.zones.create_or_update
-            create_zone(self._resource_group, name, Zone(location='global'))
+            zone = create_zone(
+                self._resource_group, name, Zone(location='global'))
             self._azure_zones.add(name)
 
             # we create the zone so we should now be able to get its root ns
-            # records, they should be one of only a couple things that exist at
-            # this point.
-            records = self._dns_client.record_sets.list_by_dns_zone
-            values = []
-            for azrecord in records(self._resource_group, name):
-                if azrecord.name == '@' and \
-                        _parse_azure_type(azrecord.type) == 'NS':
-                    values = self._data_for_NS(azrecord)['values']
-                    required_values = set([v for v in values
-                                           if 'azure-dns' in v])
-                    self._required_root_ns_values[name] = required_values
+            # records
+            self._required_root_ns_values[name] = set(zone.name_servers)
 
             return name
         else:
