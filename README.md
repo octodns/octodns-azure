@@ -67,6 +67,10 @@ The first four variables above can be hidden in environment variables and octoDN
 
 AzureProvider supports A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, and TXT
 
+#### Root NS Records
+
+AzureProvider supports root NS record management, but Azure requires that its own name servers are present in the list. If your configured name servers does not include them the provider will still leave them in place to comply.
+
 #### Dynamic
 
 AzureProvider has beta supports dynamic records.

@@ -1,3 +1,10 @@
+## v0.0.4 - 2022-??-?? - Support the root
+
+* Enable SUPPORTS_ROOT_NS for management of root NS records. Requires
+  octodns>=0.9.16. Note that azure does not allow the removal of its own name
+  servers so in cases where your config doesn't include them the provider will
+  still leave them in place for azure.
+
 ## v0.0.3 - 2022-03-04 - Honing requirements
 
 * Fix traffic manager authentication with new azure-identity
