@@ -511,6 +511,7 @@ class AzureProvider(BaseProvider):
                        'key=***, directory_id:%s, client_total_retries:%d, '
                        'client_status_retries:%d', id, client_id, directory_id,
                        client_total_retries, client_status_retries)
+        self.log.info('__init__: (octodns_azure %s)', __VERSION__)
         super(AzureProvider, self).__init__(id, *args, **kwargs)
 
         # Store necessary initialization params

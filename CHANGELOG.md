@@ -4,6 +4,8 @@
   octodns>=0.9.16. Note that azure does not allow the removal of its own name
   servers so in cases where your config doesn't include them the provider will
   still leave them in place for azure.
+* Include the version number in the __init__ output to ease reporting issues
+  and more generally knowing what version you're working with.
 
 ## v0.0.3 - 2022-03-04 - Honing requirements
 
