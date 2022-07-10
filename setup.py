@@ -32,24 +32,21 @@ def version():
 
 description, long_description = descriptions()
 
-tests_require = (
-    'pytest>=6.2.5',
-    'pytest-cov>=3.0.0',
-    'pytest-network>=0.0.1',
-)
+tests_require = ('pytest>=6.2.5', 'pytest-cov>=3.0.0', 'pytest-network>=0.0.1')
 
 setup(
     author='Ross McFarland',
     author_email='rwmcfa1@gmail.com',
     description=description,
     extras_require={
-        'dev': tests_require + (
+        'dev': tests_require
+        + (
+            'black>=22.3.0',
             'build>=0.7.0',
-            'pycodestyle>=2.6.0',
             'pyflakes>=2.2.0',
             'readme_renderer[md]>=26.0',
             'twine>=3.4.2',
-        ),
+        )
     },
     install_requires=(
         'azure-identity>=1.7.1,<1.8.0',
