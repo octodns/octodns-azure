@@ -5,134 +5,222 @@
 from unittest import TestCase
 from unittest.mock import Mock, patch, call
 
-from azure.mgmt.dns.models import ARecord, AaaaRecord, CaaRecord, \
-    CnameRecord, MxRecord, SrvRecord, NsRecord, PtrRecord, TxtRecord, \
-    RecordSet, SoaRecord, SubResource, Zone as AzureZone
-from azure.mgmt.trafficmanager.models import Profile, DnsConfig, \
-    MonitorConfig, Endpoint, MonitorConfigCustomHeadersItem
+from azure.mgmt.dns.models import (
+    ARecord,
+    AaaaRecord,
+    CaaRecord,
+    CnameRecord,
+    MxRecord,
+    SrvRecord,
+    NsRecord,
+    PtrRecord,
+    TxtRecord,
+    RecordSet,
+    SoaRecord,
+    SubResource,
+    Zone as AzureZone,
+)
+from azure.mgmt.trafficmanager.models import (
+    Profile,
+    DnsConfig,
+    MonitorConfig,
+    Endpoint,
+    MonitorConfigCustomHeadersItem,
+)
 from msrestazure.azure_exceptions import CloudError
 
 from octodns.record import Create, Update, Delete, Record
 from octodns.zone import Zone
 from octodns.provider.base import Plan
 
-from octodns_azure import _AzureRecord, AzureProvider, \
-    _check_endswith_dot, _parse_azure_type, _root_traffic_manager_name, \
-    _get_monitor, _profile_is_match, AzureException
+from octodns_azure import (
+    _AzureRecord,
+    AzureProvider,
+    _check_endswith_dot,
+    _parse_azure_type,
+    _root_traffic_manager_name,
+    _get_monitor,
+    _profile_is_match,
+    AzureException,
+)
 
 zone = Zone(name='unit.tests.', sub_zones=[])
 octo_records = []
-octo_records.append(Record.new(zone, '', {
-    'ttl': 0,
-    'type': 'A',
-    'values': ['1.2.3.4', '10.10.10.10']}))
-octo_records.append(Record.new(zone, 'a', {
-    'ttl': 1,
-    'type': 'A',
-    'values': ['1.2.3.4', '1.1.1.1']}))
-octo_records.append(Record.new(zone, 'aa', {
-    'ttl': 9001,
-    'type': 'A',
-    'values': ['1.2.4.3']}))
-octo_records.append(Record.new(zone, 'aaa', {
-    'ttl': 2,
-    'type': 'A',
-    'values': ['1.1.1.3']}))
-octo_records.append(Record.new(zone, 'aaaa1', {
-    'ttl': 300,
-    'type': 'AAAA',
-    'values': ['2601:644:500:e210:62f8:1dff:feb8:947a',
-               '2601:642:500:e210:62f8:1dff:feb8:947a'],
-}))
-octo_records.append(Record.new(zone, 'aaaa2', {
-    'ttl': 300,
-    'type': 'AAAA',
-    'value': '2601:644:500:e210:62f8:1dff:feb8:947a'
-}))
-octo_records.append(Record.new(zone, 'caa1', {
-    'ttl': 9,
-    'type': 'CAA',
-    'value': {
-        'flags': 0,
-        'tag': 'issue',
-        'value': 'ca.unit.tests',
-    }}))
-octo_records.append(Record.new(zone, 'caa2', {
-    'ttl': 9,
-    'type': 'CAA',
-    'values': [{
-        'flags': 0,
-        'tag': 'issue',
-        'value': 'ca1.unit.tests',
-    }, {
-        'flags': 0,
-        'tag': 'issue',
-        'value': 'ca2.unit.tests',
-    }]}))
-octo_records.append(Record.new(zone, 'cname', {
-    'ttl': 3,
-    'type': 'CNAME',
-    'value': 'a.unit.tests.'}))
-octo_records.append(Record.new(zone, 'mx1', {
-    'ttl': 3,
-    'type': 'MX',
-    'values': [{
-        'priority': 10,
-        'value': 'mx1.unit.tests.',
-    }, {
-        'priority': 20,
-        'value': 'mx2.unit.tests.',
-    }]}))
-octo_records.append(Record.new(zone, 'mx2', {
-    'ttl': 3,
-    'type': 'MX',
-    'values': [{
-        'priority': 10,
-        'value': 'mx1.unit.tests.',
-    }]}))
-octo_records.append(Record.new(zone, '', {
-    'ttl': 4,
-    'type': 'NS',
-    'values': ['ns1.unit.tests.', 'ns2.unit.tests.']}))
-octo_records.append(Record.new(zone, 'foo', {
-    'ttl': 5,
-    'type': 'NS',
-    'value': 'ns1.unit.tests.'}))
-octo_records.append(Record.new(zone, 'ptr1', {
-    'ttl': 5,
-    'type': 'PTR',
-    'value': 'ptr1.unit.tests.'}))
-octo_records.append(Record.new(zone, '_srv._tcp', {
-    'ttl': 6,
-    'type': 'SRV',
-    'values': [{
-        'priority': 10,
-        'weight': 20,
-        'port': 30,
-        'target': 'foo-1.unit.tests.',
-    }, {
-        'priority': 12,
-        'weight': 30,
-        'port': 30,
-        'target': 'foo-2.unit.tests.',
-    }]}))
-octo_records.append(Record.new(zone, '_srv2._tcp', {
-    'ttl': 7,
-    'type': 'SRV',
-    'values': [{
-        'priority': 12,
-        'weight': 17,
-        'port': 1,
-        'target': 'srvfoo.unit.tests.',
-    }]}))
-octo_records.append(Record.new(zone, 'txt1', {
-    'ttl': 8,
-    'type': 'TXT',
-    'value': 'txt singleton test'}))
-octo_records.append(Record.new(zone, 'txt2', {
-    'ttl': 9,
-    'type': 'TXT',
-    'values': ['txt multiple test', 'txt multiple test 2']}))
+octo_records.append(
+    Record.new(
+        zone, '', {'ttl': 0, 'type': 'A', 'values': ['1.2.3.4', '10.10.10.10']}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone, 'a', {'ttl': 1, 'type': 'A', 'values': ['1.2.3.4', '1.1.1.1']}
+    )
+)
+octo_records.append(
+    Record.new(zone, 'aa', {'ttl': 9001, 'type': 'A', 'values': ['1.2.4.3']})
+)
+octo_records.append(
+    Record.new(zone, 'aaa', {'ttl': 2, 'type': 'A', 'values': ['1.1.1.3']})
+)
+octo_records.append(
+    Record.new(
+        zone,
+        'aaaa1',
+        {
+            'ttl': 300,
+            'type': 'AAAA',
+            'values': [
+                '2601:644:500:e210:62f8:1dff:feb8:947a',
+                '2601:642:500:e210:62f8:1dff:feb8:947a',
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        'aaaa2',
+        {
+            'ttl': 300,
+            'type': 'AAAA',
+            'value': '2601:644:500:e210:62f8:1dff:feb8:947a',
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        'caa1',
+        {
+            'ttl': 9,
+            'type': 'CAA',
+            'value': {'flags': 0, 'tag': 'issue', 'value': 'ca.unit.tests'},
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        'caa2',
+        {
+            'ttl': 9,
+            'type': 'CAA',
+            'values': [
+                {'flags': 0, 'tag': 'issue', 'value': 'ca1.unit.tests'},
+                {'flags': 0, 'tag': 'issue', 'value': 'ca2.unit.tests'},
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone, 'cname', {'ttl': 3, 'type': 'CNAME', 'value': 'a.unit.tests.'}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        'mx1',
+        {
+            'ttl': 3,
+            'type': 'MX',
+            'values': [
+                {'priority': 10, 'value': 'mx1.unit.tests.'},
+                {'priority': 20, 'value': 'mx2.unit.tests.'},
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        'mx2',
+        {
+            'ttl': 3,
+            'type': 'MX',
+            'values': [{'priority': 10, 'value': 'mx1.unit.tests.'}],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        '',
+        {
+            'ttl': 4,
+            'type': 'NS',
+            'values': ['ns1.unit.tests.', 'ns2.unit.tests.'],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone, 'foo', {'ttl': 5, 'type': 'NS', 'value': 'ns1.unit.tests.'}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone, 'ptr1', {'ttl': 5, 'type': 'PTR', 'value': 'ptr1.unit.tests.'}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        '_srv._tcp',
+        {
+            'ttl': 6,
+            'type': 'SRV',
+            'values': [
+                {
+                    'priority': 10,
+                    'weight': 20,
+                    'port': 30,
+                    'target': 'foo-1.unit.tests.',
+                },
+                {
+                    'priority': 12,
+                    'weight': 30,
+                    'port': 30,
+                    'target': 'foo-2.unit.tests.',
+                },
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        '_srv2._tcp',
+        {
+            'ttl': 7,
+            'type': 'SRV',
+            'values': [
+                {
+                    'priority': 12,
+                    'weight': 17,
+                    'port': 1,
+                    'target': 'srvfoo.unit.tests.',
+                }
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone, 'txt1', {'ttl': 8, 'type': 'TXT', 'value': 'txt singleton test'}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone,
+        'txt2',
+        {
+            'ttl': 9,
+            'type': 'TXT',
+            'values': ['txt multiple test', 'txt multiple test 2'],
+        },
+    )
+)
 
 long_txt = "v=spf1 ip4:10.10.0.0/24 ip4:10.10.1.0/24 ip4:10.10.2.0/24"
 long_txt += " ip4:10.10.3.0/24 ip4:10.10.4.0/24 ip4:10.10.5.0/24 "
@@ -141,15 +229,25 @@ long_txt += " ip4:10.10.10.0/24 ip4:10.10.11.0/24 ip4:10.10.12.0/24"
 long_txt += " ip4:10.10.13.0/24 ip4:10.10.14.0/24 ip4:10.10.15.0/24"
 long_txt += " ip4:10.10.16.0/24 ip4:10.10.17.0/24 ip4:10.10.18.0/24"
 long_txt += " ip4:10.10.19.0/24 ip4:10.10.20.0/24  ~all"
-octo_records.append(Record.new(zone, 'txt3', {
-    'ttl': 10,
-    'type': 'TXT',
-    'values': ['txt multiple test', long_txt]}))
+octo_records.append(
+    Record.new(
+        zone,
+        'txt3',
+        {'ttl': 10, 'type': 'TXT', 'values': ['txt multiple test', long_txt]},
+    )
+)
 
-octo_records.append(Record.new(zone, 'ptr2', {
-    'ttl': 11,
-    'type': 'PTR',
-    'values': ['ptr21.unit.tests.', 'ptr22.unit.tests.']}))
+octo_records.append(
+    Record.new(
+        zone,
+        'ptr2',
+        {
+            'ttl': 11,
+            'type': 'PTR',
+            'values': ['ptr21.unit.tests.', 'ptr22.unit.tests.'],
+        },
+    )
+)
 
 azure_records = []
 _base0 = _AzureRecord('TestAzure', octo_records[0])
@@ -157,8 +255,10 @@ _base0.zone_name = 'unit.tests'
 _base0.relative_record_set_name = '@'
 _base0.record_type = 'A'
 _base0.params['ttl'] = 0
-_base0.params['a_records'] = [ARecord(ipv4_address='1.2.3.4'),
-                              ARecord(ipv4_address='10.10.10.10')]
+_base0.params['a_records'] = [
+    ARecord(ipv4_address='1.2.3.4'),
+    ARecord(ipv4_address='10.10.10.10'),
+]
 azure_records.append(_base0)
 
 _base1 = _AzureRecord('TestAzure', octo_records[1])
@@ -166,8 +266,10 @@ _base1.zone_name = 'unit.tests'
 _base1.relative_record_set_name = 'a'
 _base1.record_type = 'A'
 _base1.params['ttl'] = 1
-_base1.params['a_records'] = [ARecord(ipv4_address='1.2.3.4'),
-                              ARecord(ipv4_address='1.1.1.1')]
+_base1.params['a_records'] = [
+    ARecord(ipv4_address='1.2.3.4'),
+    ARecord(ipv4_address='1.1.1.1'),
+]
 azure_records.append(_base1)
 
 _base2 = _AzureRecord('TestAzure', octo_records[2])
@@ -209,9 +311,9 @@ _base6.zone_name = 'unit.tests'
 _base6.relative_record_set_name = 'caa1'
 _base6.record_type = 'CAA'
 _base6.params['ttl'] = 9
-_base6.params['caa_records'] = [CaaRecord(flags=0,
-                                          tag='issue',
-                                          value='ca.unit.tests')]
+_base6.params['caa_records'] = [
+    CaaRecord(flags=0, tag='issue', value='ca.unit.tests')
+]
 azure_records.append(_base6)
 
 _base7 = _AzureRecord('TestAzure', octo_records[7])
@@ -219,12 +321,10 @@ _base7.zone_name = 'unit.tests'
 _base7.relative_record_set_name = 'caa2'
 _base7.record_type = 'CAA'
 _base7.params['ttl'] = 9
-_base7.params['caa_records'] = [CaaRecord(flags=0,
-                                          tag='issue',
-                                          value='ca1.unit.tests'),
-                                CaaRecord(flags=0,
-                                          tag='issue',
-                                          value='ca2.unit.tests')]
+_base7.params['caa_records'] = [
+    CaaRecord(flags=0, tag='issue', value='ca1.unit.tests'),
+    CaaRecord(flags=0, tag='issue', value='ca2.unit.tests'),
+]
 azure_records.append(_base7)
 
 _base8 = _AzureRecord('TestAzure', octo_records[8])
@@ -240,10 +340,10 @@ _base9.zone_name = 'unit.tests'
 _base9.relative_record_set_name = 'mx1'
 _base9.record_type = 'MX'
 _base9.params['ttl'] = 3
-_base9.params['mx_records'] = [MxRecord(preference=10,
-                                        exchange='mx1.unit.tests.'),
-                               MxRecord(preference=20,
-                                        exchange='mx2.unit.tests.')]
+_base9.params['mx_records'] = [
+    MxRecord(preference=10, exchange='mx1.unit.tests.'),
+    MxRecord(preference=20, exchange='mx2.unit.tests.'),
+]
 azure_records.append(_base9)
 
 _base10 = _AzureRecord('TestAzure', octo_records[10])
@@ -251,8 +351,9 @@ _base10.zone_name = 'unit.tests'
 _base10.relative_record_set_name = 'mx2'
 _base10.record_type = 'MX'
 _base10.params['ttl'] = 3
-_base10.params['mx_records'] = [MxRecord(preference=10,
-                                         exchange='mx1.unit.tests.')]
+_base10.params['mx_records'] = [
+    MxRecord(preference=10, exchange='mx1.unit.tests.')
+]
 azure_records.append(_base10)
 
 _base11 = _AzureRecord('TestAzure', octo_records[11])
@@ -260,8 +361,10 @@ _base11.zone_name = 'unit.tests'
 _base11.relative_record_set_name = '@'
 _base11.record_type = 'NS'
 _base11.params['ttl'] = 4
-_base11.params['ns_records'] = [NsRecord(nsdname='ns1.unit.tests.'),
-                                NsRecord(nsdname='ns2.unit.tests.')]
+_base11.params['ns_records'] = [
+    NsRecord(nsdname='ns1.unit.tests.'),
+    NsRecord(nsdname='ns2.unit.tests.'),
+]
 azure_records.append(_base11)
 
 _base12 = _AzureRecord('TestAzure', octo_records[12])
@@ -285,14 +388,10 @@ _base14.zone_name = 'unit.tests'
 _base14.relative_record_set_name = '_srv._tcp'
 _base14.record_type = 'SRV'
 _base14.params['ttl'] = 6
-_base14.params['srv_records'] = [SrvRecord(priority=10,
-                                           weight=20,
-                                           port=30,
-                                           target='foo-1.unit.tests.'),
-                                 SrvRecord(priority=12,
-                                           weight=30,
-                                           port=30,
-                                           target='foo-2.unit.tests.')]
+_base14.params['srv_records'] = [
+    SrvRecord(priority=10, weight=20, port=30, target='foo-1.unit.tests.'),
+    SrvRecord(priority=12, weight=30, port=30, target='foo-2.unit.tests.'),
+]
 azure_records.append(_base14)
 
 _base15 = _AzureRecord('TestAzure', octo_records[15])
@@ -300,10 +399,9 @@ _base15.zone_name = 'unit.tests'
 _base15.relative_record_set_name = '_srv2._tcp'
 _base15.record_type = 'SRV'
 _base15.params['ttl'] = 7
-_base15.params['srv_records'] = [SrvRecord(priority=12,
-                                           weight=17,
-                                           port=1,
-                                           target='srvfoo.unit.tests.')]
+_base15.params['srv_records'] = [
+    SrvRecord(priority=12, weight=17, port=1, target='srvfoo.unit.tests.')
+]
 azure_records.append(_base15)
 
 _base16 = _AzureRecord('TestAzure', octo_records[16])
@@ -319,8 +417,10 @@ _base17.zone_name = 'unit.tests'
 _base17.relative_record_set_name = 'txt2'
 _base17.record_type = 'TXT'
 _base17.params['ttl'] = 9
-_base17.params['txt_records'] = [TxtRecord(value=['txt multiple test']),
-                                 TxtRecord(value=['txt multiple test 2'])]
+_base17.params['txt_records'] = [
+    TxtRecord(value=['txt multiple test']),
+    TxtRecord(value=['txt multiple test 2']),
+]
 azure_records.append(_base17)
 
 long_txt_az1 = "v=spf1 ip4:10.10.0.0/24 ip4:10.10.1.0/24 ip4:10.10.2.0/24"
@@ -335,8 +435,10 @@ _base18.zone_name = 'unit.tests'
 _base18.relative_record_set_name = 'txt3'
 _base18.record_type = 'TXT'
 _base18.params['ttl'] = 10
-_base18.params['txt_records'] = [TxtRecord(value=['txt multiple test']),
-                                 TxtRecord(value=[long_txt_az1, long_txt_az2])]
+_base18.params['txt_records'] = [
+    TxtRecord(value=['txt multiple test']),
+    TxtRecord(value=[long_txt_az1, long_txt_az2]),
+]
 azure_records.append(_base18)
 
 _base19 = _AzureRecord('TestAzure', octo_records[19])
@@ -344,17 +446,19 @@ _base19.zone_name = 'unit.tests'
 _base19.relative_record_set_name = 'ptr2'
 _base19.record_type = 'PTR'
 _base19.params['ttl'] = 11
-_base19.params['ptr_records'] = [PtrRecord(ptrdname='ptr21.unit.tests.'),
-                                 PtrRecord(ptrdname='ptr22.unit.tests.')]
+_base19.params['ptr_records'] = [
+    PtrRecord(ptrdname='ptr21.unit.tests.'),
+    PtrRecord(ptrdname='ptr22.unit.tests.'),
+]
 azure_records.append(_base19)
 
 
 class Test_AzureRecord(TestCase):
     def test_azure_record(self):
-        assert(len(azure_records) == len(octo_records))
+        assert len(azure_records) == len(octo_records)
         for i in range(len(azure_records)):
             octo = _AzureRecord('TestAzure', octo_records[i])
-            assert(azure_records[i]._equals(octo))
+            assert azure_records[i]._equals(octo)
 
 
 class Test_DynamicAzureRecord(TestCase):
@@ -367,26 +471,20 @@ class Test_DynamicAzureRecord(TestCase):
             'dynamic': {
                 'pools': {
                     'one': {
-                        'values': [
-                            {'value': 'one.unit.tests.', 'weight': 1}
-                        ],
+                        'values': [{'value': 'one.unit.tests.', 'weight': 1}],
                         'fallback': 'two',
                     },
                     'two': {
-                        'values': [
-                            {'value': 'two.unit.tests.', 'weight': 1}
-                        ],
+                        'values': [{'value': 'two.unit.tests.', 'weight': 1}]
                     },
                 },
-                'rules': [
-                    {'geos': ['AF'], 'pool': 'one'},
-                    {'pool': 'two'},
-                ],
-            }
+                'rules': [{'geos': ['AF'], 'pool': 'one'}, {'pool': 'two'}],
+            },
         }
         octo_record = Record.new(zone, 'foo', data)
-        azure_record = _AzureRecord('TestAzure', octo_record,
-                                    traffic_manager=tm_profile)
+        azure_record = _AzureRecord(
+            'TestAzure', octo_record, traffic_manager=tm_profile
+        )
         self.assertEqual(azure_record.zone_name, zone.name[:-1])
         self.assertEqual(azure_record.relative_record_set_name, 'foo')
         self.assertEqual(azure_record.record_type, 'CNAME')
@@ -396,42 +494,54 @@ class Test_DynamicAzureRecord(TestCase):
 
 class Test_ParseAzureType(TestCase):
     def test_parse_azure_type(self):
-        for expected, test in [['A', 'Microsoft.Network/dnszones/A'],
-                               ['AAAA', 'Microsoft.Network/dnszones/AAAA'],
-                               ['NS', 'Microsoft.Network/dnszones/NS'],
-                               ['MX', 'Microsoft.Network/dnszones/MX']]:
+        for expected, test in [
+            ['A', 'Microsoft.Network/dnszones/A'],
+            ['AAAA', 'Microsoft.Network/dnszones/AAAA'],
+            ['NS', 'Microsoft.Network/dnszones/NS'],
+            ['MX', 'Microsoft.Network/dnszones/MX'],
+        ]:
             self.assertEqual(expected, _parse_azure_type(test))
 
 
 class Test_CheckEndswithDot(TestCase):
     def test_check_endswith_dot(self):
-        for expected, test in [['a.', 'a'],
-                               ['a.', 'a.'],
-                               ['foo.bar.', 'foo.bar.'],
-                               ['foo.bar.', 'foo.bar']]:
+        for expected, test in [
+            ['a.', 'a'],
+            ['a.', 'a.'],
+            ['foo.bar.', 'foo.bar.'],
+            ['foo.bar.', 'foo.bar'],
+        ]:
             self.assertEqual(expected, _check_endswith_dot(test))
 
 
 class Test_RootTrafficManagerName(TestCase):
     def test_root_traffic_manager_name(self):
-        test = Record.new(zone, 'foo', data={
-            'ttl': 60, 'type': 'CNAME', 'value': 'default.unit.tests.',
-        })
+        test = Record.new(
+            zone,
+            'foo',
+            data={'ttl': 60, 'type': 'CNAME', 'value': 'default.unit.tests.'},
+        )
         self.assertEqual(_root_traffic_manager_name(test), 'foo--unit--tests')
 
 
 class Test_GetMonitor(TestCase):
     def test_get_monitor(self):
-        record = Record.new(zone, 'foo', data={
-            'type': 'CNAME', 'ttl': 60, 'value': 'default.unit.tests.',
-            'octodns': {
-                'healthcheck': {
-                    'path': '/_ping',
-                    'port': 4443,
-                    'protocol': 'HTTPS',
-                }
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'octodns': {
+                    'healthcheck': {
+                        'path': '/_ping',
+                        'port': 4443,
+                        'protocol': 'HTTPS',
+                    }
+                },
             },
-        })
+        )
 
         monitor = _get_monitor(record)
         self.assertEqual(monitor.protocol, 'HTTPS')
@@ -460,29 +570,31 @@ class Test_ProfileIsMatch(TestCase):
         # Profile object builder with default property values that can be
         # overridden for testing below
         def profile(
-            name = 'foo-unit-tests',
-            ttl = 60,
-            method = 'Geographic',
-            dns_name = None,
-            monitor_proto = 'HTTPS',
-            monitor_port = 4443,
-            monitor_path = '/_ping',
-            monitor_interval = 30,
-            monitor_timeout = 10,
-            monitor_num_failures = 3,
-            endpoints = 1,
-            endpoint_name = 'name',
-            endpoint_type = 'profile/nestedEndpoints',
-            endpoint_status = None,
-            target = 'target.unit.tests',
-            target_id = 'resource/id',
-            geos = ['GEO-AF'],
-            weight = 1,
-            priority = 1,
+            name='foo-unit-tests',
+            ttl=60,
+            method='Geographic',
+            dns_name=None,
+            monitor_proto='HTTPS',
+            monitor_port=4443,
+            monitor_path='/_ping',
+            monitor_interval=30,
+            monitor_timeout=10,
+            monitor_num_failures=3,
+            endpoints=1,
+            endpoint_name='name',
+            endpoint_type='profile/nestedEndpoints',
+            endpoint_status=None,
+            target='target.unit.tests',
+            target_id='resource/id',
+            geos=['GEO-AF'],
+            weight=1,
+            priority=1,
         ):
             dns = DnsConfig(relative_name=(dns_name or name), ttl=ttl)
             return Profile(
-                name=name, traffic_routing_method=method, dns_config=dns,
+                name=name,
+                traffic_routing_method=method,
+                dns_config=dns,
                 monitor_config=MonitorConfig(
                     protocol=monitor_proto,
                     port=monitor_port,
@@ -491,16 +603,19 @@ class Test_ProfileIsMatch(TestCase):
                     timeout_in_seconds=monitor_timeout,
                     tolerated_number_of_failures=monitor_num_failures,
                 ),
-                endpoints=[Endpoint(
-                    name=endpoint_name,
-                    type=endpoint_type,
-                    endpoint_status=endpoint_status,
-                    target=target,
-                    target_resource_id=target_id,
-                    geo_mapping=geos,
-                    weight=weight,
-                    priority=priority,
-                )] + [Endpoint()] * (endpoints - 1),
+                endpoints=[
+                    Endpoint(
+                        name=endpoint_name,
+                        type=endpoint_type,
+                        endpoint_status=endpoint_status,
+                        target=target,
+                        target_resource_id=target_id,
+                        geo_mapping=geos,
+                        weight=weight,
+                        priority=priority,
+                    )
+                ]
+                + [Endpoint()] * (endpoints - 1),
             )
 
         self.assertTrue(is_match(profile(), profile()))
@@ -509,18 +624,9 @@ class Test_ProfileIsMatch(TestCase):
         self.assertFalse(is_match(profile(), profile(endpoints=2)))
         self.assertFalse(is_match(profile(), profile(dns_name='two')))
         self.assertFalse(is_match(profile(), profile(monitor_proto='HTTP')))
-        self.assertFalse(is_match(
-            profile(),
-            profile(monitor_interval=9),
-        ))
-        self.assertFalse(is_match(
-            profile(),
-            profile(monitor_timeout=3),
-        ))
-        self.assertFalse(is_match(
-            profile(),
-            profile(monitor_num_failures=2),
-        ))
+        self.assertFalse(is_match(profile(), profile(monitor_interval=9)))
+        self.assertFalse(is_match(profile(), profile(monitor_timeout=3)))
+        self.assertFalse(is_match(profile(), profile(monitor_num_failures=2)))
         self.assertFalse(is_match(profile(), profile(endpoint_name='a')))
         self.assertFalse(is_match(profile(), profile(endpoint_type='b')))
         self.assertFalse(
@@ -531,16 +637,18 @@ class Test_ProfileIsMatch(TestCase):
         )
         self.assertFalse(is_match(profile(), profile(target_id='rsrc/id2')))
         self.assertFalse(is_match(profile(), profile(geos=['IN'])))
-        self.assertFalse(is_match(
-            profile(endpoint_type='profile/externalEndpoints'),
-            profile(
-                endpoint_type='profile/externalEndpoints',
-                geos=['IN']
+        self.assertFalse(
+            is_match(
+                profile(endpoint_type='profile/externalEndpoints'),
+                profile(endpoint_type='profile/externalEndpoints', geos=['IN']),
             )
-        ))
-        self.assertFalse(is_match(profile(method='Priority'), profile(
-            method='Priority', priority=2
-        )))
+        )
+        self.assertFalse(
+            is_match(
+                profile(method='Priority'),
+                profile(method='Priority', priority=2),
+            )
+        )
 
         def wprofile(**kwargs):
             kwargs['method'] = 'Weighted'
@@ -558,18 +666,23 @@ class TestAzureDnsProvider(TestCase):
     def _get_provider(self, mock_css, mock_client, mock_tm_client):
         '''Returns a mock AzureProvider object to use in testing.
 
-            :param mock_spc: placeholder
-            :type  mock_spc: str
-            :param mock_client: placeholder
-            :type  mock_client: str
-            :param mock_tm_client: placeholder
-            :type  mock_tm_client: str
+        :param mock_spc: placeholder
+        :type  mock_spc: str
+        :param mock_client: placeholder
+        :type  mock_client: str
+        :param mock_tm_client: placeholder
+        :type  mock_tm_client: str
 
-            :type return: AzureProvider
+        :type return: AzureProvider
         '''
-        provider = AzureProvider('mock_id', 'mock_client', 'mock_key',
-                                 'mock_directory', 'mock_sub', 'mock_rg'
-                                 )
+        provider = AzureProvider(
+            'mock_id',
+            'mock_client',
+            'mock_key',
+            'mock_directory',
+            'mock_sub',
+            'mock_rg',
+        )
 
         # Fetch the client to force it to load the creds
         provider._dns_client
@@ -594,62 +707,78 @@ class TestAzureDnsProvider(TestCase):
         return provider
 
     def _get_dynamic_record(self, zone):
-        return Record.new(zone, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [
-                            {'value': 'one.unit.tests.', 'weight': 1},
-                        ],
-                        'fallback': 'two',
+        return Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [
+                                {'value': 'one.unit.tests.', 'weight': 1}
+                            ],
+                            'fallback': 'two',
+                        },
+                        'two': {
+                            'values': [
+                                {'value': 'two1.unit.tests.', 'weight': 3},
+                                {'value': 'two2.unit.tests.', 'weight': 4},
+                            ],
+                            'fallback': 'three',
+                        },
+                        'three': {
+                            'values': [
+                                {'value': 'three.unit.tests.', 'weight': 1}
+                            ]
+                        },
                     },
-                    'two': {
-                        'values': [
-                            {'value': 'two1.unit.tests.', 'weight': 3},
-                            {'value': 'two2.unit.tests.', 'weight': 4},
-                        ],
-                        'fallback': 'three',
-                    },
-                    'three': {
-                        'values': [
-                            {'value': 'three.unit.tests.', 'weight': 1},
-                        ],
-                    },
+                    'rules': [
+                        {
+                            'geos': ['AF', 'EU-DE', 'NA-US-CA', 'OC'],
+                            'pool': 'one',
+                        },
+                        {'pool': 'two'},
+                    ],
                 },
-                'rules': [
-                    {'geos': ['AF', 'EU-DE', 'NA-US-CA', 'OC'], 'pool': 'one'},
-                    {'pool': 'two'},
-                ],
+                'octodns': {
+                    'healthcheck': {
+                        'path': '/_ping',
+                        'port': 4443,
+                        'protocol': 'HTTPS',
+                    }
+                },
             },
-            'octodns': {
-                'healthcheck': {
-                    'path': '/_ping',
-                    'port': 4443,
-                    'protocol': 'HTTPS',
-                }
-            },
-        })
+        )
 
     def _get_tm_profiles(self, provider):
         sub = provider._client_subscription_id
         rg = provider._resource_group
-        base_id = '/subscriptions/' + sub + \
-            '/resourceGroups/' + rg + \
-            '/providers/Microsoft.Network/trafficManagerProfiles/'
+        base_id = (
+            '/subscriptions/'
+            + sub
+            + '/resourceGroups/'
+            + rg
+            + '/providers/Microsoft.Network/trafficManagerProfiles/'
+        )
         prefix = 'foo--unit--tests'
         name_format = prefix + '-'
         id_format = base_id + name_format
 
-        header = MonitorConfigCustomHeadersItem(name='Host',
-                                                value='foo.unit.tests')
-        monitor = MonitorConfig(protocol='HTTPS', port=4443, path='/_ping',
-                                tolerated_number_of_failures=3,
-                                interval_in_seconds=30,
-                                timeout_in_seconds=10,
-                                custom_headers=[header])
+        header = MonitorConfigCustomHeadersItem(
+            name='Host', value='foo.unit.tests'
+        )
+        monitor = MonitorConfig(
+            protocol='HTTPS',
+            port=4443,
+            path='/_ping',
+            tolerated_number_of_failures=3,
+            interval_in_seconds=30,
+            timeout_in_seconds=10,
+            custom_headers=[header],
+        )
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
 
@@ -764,8 +893,7 @@ class TestAzureDnsProvider(TestCase):
         return profiles
 
     def _get_dynamic_package(self):
-        '''Convenience function to setup a sample dynamic record.
-        '''
+        '''Convenience function to setup a sample dynamic record.'''
         provider = self._get_provider()
 
         # setup traffic manager profiles
@@ -788,8 +916,12 @@ class TestAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'a1', 0, 'A'
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
-        recordSet = RecordSet(a_records=[ARecord(ipv4_address='1.1.1.1'),
-                                         ARecord(ipv4_address='2.2.2.2')])
+        recordSet = RecordSet(
+            a_records=[
+                ARecord(ipv4_address='1.1.1.1'),
+                ARecord(ipv4_address='2.2.2.2'),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
@@ -799,22 +931,23 @@ class TestAzureDnsProvider(TestCase):
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
         aaaa2 = AaaaRecord(ipv6_address='1:1ec:1::2')
-        recordSet = RecordSet(aaaa_records=[aaaa1,
-                                            aaaa2])
+        recordSet = RecordSet(aaaa_records=[aaaa1, aaaa2])
         recordSet.name, recordSet.ttl, recordSet.type = 'aaaa2', 3, 'AAAA'
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
-        recordSet = RecordSet(caa_records=[CaaRecord(flags=0,
-                                                     tag='issue',
-                                                     value='caa1.unit.tests')])
+        recordSet = RecordSet(
+            caa_records=[
+                CaaRecord(flags=0, tag='issue', value='caa1.unit.tests')
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'caa1', 4, 'CAA'
         rs.append(recordSet)
-        recordSet = RecordSet(caa_records=[CaaRecord(flags=0,
-                                                     tag='issue',
-                                                     value='caa1.unit.tests'),
-                                           CaaRecord(flags=0,
-                                                     tag='issue',
-                                                     value='caa2.unit.tests')])
+        recordSet = RecordSet(
+            caa_records=[
+                CaaRecord(flags=0, tag='issue', value='caa1.unit.tests'),
+                CaaRecord(flags=0, tag='issue', value='caa2.unit.tests'),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'caa2', 4, 'CAA'
         rs.append(recordSet)
         cname1 = CnameRecord(cname='cname.unit.test.')
@@ -822,49 +955,59 @@ class TestAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'cname1', 5, 'CNAME'
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
-        recordSet = RecordSet(mx_records=[MxRecord(preference=10,
-                                                   exchange='mx1.unit.test.')])
+        recordSet = RecordSet(
+            mx_records=[MxRecord(preference=10, exchange='mx1.unit.test.')]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'mx1', 7, 'MX'
         rs.append(recordSet)
-        recordSet = RecordSet(mx_records=[MxRecord(preference=10,
-                                                   exchange='mx1.unit.test.'),
-                                          MxRecord(preference=11,
-                                                   exchange='mx2.unit.test.')])
+        recordSet = RecordSet(
+            mx_records=[
+                MxRecord(preference=10, exchange='mx1.unit.test.'),
+                MxRecord(preference=11, exchange='mx2.unit.test.'),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'mx2', 8, 'MX'
         rs.append(recordSet)
         recordSet = RecordSet(ns_records=[NsRecord(nsdname='ns1.unit.test.')])
         recordSet.name, recordSet.ttl, recordSet.type = 'ns1', 9, 'NS'
         rs.append(recordSet)
-        recordSet = RecordSet(ns_records=[NsRecord(nsdname='ns1.unit.test.'),
-                                          NsRecord(nsdname='ns2.unit.test.')])
+        recordSet = RecordSet(
+            ns_records=[
+                NsRecord(nsdname='ns1.unit.test.'),
+                NsRecord(nsdname='ns2.unit.test.'),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'ns2', 10, 'NS'
         rs.append(recordSet)
         ptr1 = PtrRecord(ptrdname='ptr1.unit.test.')
         recordSet = RecordSet(ptr_records=[ptr1])
         recordSet.name, recordSet.ttl, recordSet.type = 'ptr1', 11, 'PTR'
         rs.append(recordSet)
-        recordSet = RecordSet(srv_records=[SrvRecord(priority=1,
-                                                     weight=2,
-                                                     port=3,
-                                                     target='1unit.tests.')])
+        recordSet = RecordSet(
+            srv_records=[
+                SrvRecord(priority=1, weight=2, port=3, target='1unit.tests.')
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = '_srv1._tcp', 13, 'SRV'
         rs.append(recordSet)
-        recordSet = RecordSet(srv_records=[SrvRecord(priority=1,
-                                                     weight=2,
-                                                     port=3,
-                                                     target='1unit.tests.'),
-                                           SrvRecord(priority=4,
-                                                     weight=5,
-                                                     port=6,
-                                                     target='2unit.tests.')])
+        recordSet = RecordSet(
+            srv_records=[
+                SrvRecord(priority=1, weight=2, port=3, target='1unit.tests.'),
+                SrvRecord(priority=4, weight=5, port=6, target='2unit.tests.'),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = '_srv2._tcp', 14, 'SRV'
         rs.append(recordSet)
         recordSet = RecordSet(txt_records=[TxtRecord(value='sample text1')])
         recordSet.name, recordSet.ttl, recordSet.type = 'txt1', 15, 'TXT'
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
-        recordSet = RecordSet(txt_records=[TxtRecord(value='sample text1'),
-                                           TxtRecord(value='sample text2')])
+        recordSet = RecordSet(
+            txt_records=[
+                TxtRecord(value='sample text1'),
+                TxtRecord(value='sample text2'),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'txt2', 16, 'TXT'
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
@@ -878,8 +1021,12 @@ class TestAzureDnsProvider(TestCase):
         long_txt += " ip4:10.10.13.0/24 ip4:10.10.14.0/24 ip4:10.10.15.0/24"
         long_txt += " ip4:10.10.16.0/24 ip4:10.10.17.0/24 ip4:10.10.18.0/24"
         long_txt += " ip4:10.10.19.0/24 ip4:10.10.20.0/24  ~all"
-        recordSet = RecordSet(txt_records=[TxtRecord(value='sample value1'),
-                                           TxtRecord(value=long_txt)])
+        recordSet = RecordSet(
+            txt_records=[
+                TxtRecord(value='sample value1'),
+                TxtRecord(value=long_txt),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'txt3', 18, 'TXT'
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
@@ -907,9 +1054,7 @@ class TestAzureDnsProvider(TestCase):
         # This is far from ideal but the
         # zone constructor doesn't let me set it on creation
         zone_2.name = "zone-2"
-        zone_list.return_value = [zone_1,
-                                  zone_2,
-                                  zone_1]
+        zone_list.return_value = [zone_1, zone_2, zone_1]
 
         zones = provider._azure_zones
         self.assertTrue(zone_1.name in zones)
@@ -923,21 +1068,22 @@ class TestAzureDnsProvider(TestCase):
 
         _get = provider._dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), 'Azure Error')
-        self.assertEqual(
-            provider._check_zone('unit.test', create=False),
-            None
-        )
+        self.assertEqual(provider._check_zone('unit.test', create=False), None)
 
     def test_extra_changes(self):
         provider, existing, record = self._get_dynamic_package()
 
         # test simple records produce no extra changes
         desired = Zone(name=existing.name, sub_zones=[])
-        simple = Record.new(desired, 'simple', data={
-            'type': record._type,
-            'ttl': record.ttl,
-            'value': record.value,
-        })
+        simple = Record.new(
+            desired,
+            'simple',
+            data={
+                'type': record._type,
+                'ttl': record.ttl,
+                'value': record.value,
+            },
+        )
         desired.add_record(simple)
         extra = provider._extra_changes(desired, desired, [Create(simple)])
         self.assertEqual(len(extra), 0)
@@ -971,27 +1117,35 @@ class TestAzureDnsProvider(TestCase):
         tm_list.return_value.pop()
 
         # test new dynamic record does not produce an extra change for it
-        new_dynamic = Record.new(desired, record.name + '2', data={
-            'type': record._type,
-            'ttl': record.ttl,
-            'value': record.value,
-            'dynamic': record.dynamic._data(),
-            'octodns': record._octodns,
-        })
+        new_dynamic = Record.new(
+            desired,
+            record.name + '2',
+            data={
+                'type': record._type,
+                'ttl': record.ttl,
+                'value': record.value,
+                'dynamic': record.dynamic._data(),
+                'octodns': record._octodns,
+            },
+        )
         # test change in healthcheck by using a different port number
-        update_dynamic = Record.new(desired, record.name, data={
-            'type': record._type,
-            'ttl': record.ttl,
-            'value': record.value,
-            'dynamic': record.dynamic._data(),
-            'octodns': {
-                'healthcheck': {
-                    'path': '/_ping',
-                    'port': 443,
-                    'protocol': 'HTTPS',
+        update_dynamic = Record.new(
+            desired,
+            record.name,
+            data={
+                'type': record._type,
+                'ttl': record.ttl,
+                'value': record.value,
+                'dynamic': record.dynamic._data(),
+                'octodns': {
+                    'healthcheck': {
+                        'path': '/_ping',
+                        'port': 443,
+                        'protocol': 'HTTPS',
+                    }
                 },
             },
-        })
+        )
         desired.add_record(new_dynamic)
         desired.add_record(update_dynamic)
         changes = [Create(new_dynamic)]
@@ -1004,19 +1158,21 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(extra.new, update_dynamic)
 
         # test dynamic record of unsupported type throws exception
-        unsupported_dynamic = Record.new(desired, record.name + '3', data={
-            'type': 'DNAME',
-            'ttl': record.ttl,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'one': {'values': [{'value': 'one.unit.tests.'}]},
+        unsupported_dynamic = Record.new(
+            desired,
+            record.name + '3',
+            data={
+                'type': 'DNAME',
+                'ttl': record.ttl,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': 'one.unit.tests.'}]}
+                    },
+                    'rules': [{'pool': 'one'}],
                 },
-                'rules': [
-                    {'pool': 'one'},
-                ],
             },
-        })
+        )
         desired.add_record(unsupported_dynamic)
         changes = [Create(unsupported_dynamic)]
         with self.assertRaises(AzureException) as ctx:
@@ -1025,54 +1181,61 @@ class TestAzureDnsProvider(TestCase):
         desired._remove_record(unsupported_dynamic)
 
         # test colliding ATM names throws exception
-        record1 = Record.new(desired, 'sub.www', data={
-            'type': record._type,
-            'ttl': record.ttl,
-            'value': record.value,
-            'dynamic': record.dynamic._data(),
-        })
-        record2 = Record.new(desired, 'sub--www', data={
-            'type': record._type,
-            'ttl': record.ttl,
-            'value': record.value,
-            'dynamic': record.dynamic._data(),
-        })
+        record1 = Record.new(
+            desired,
+            'sub.www',
+            data={
+                'type': record._type,
+                'ttl': record.ttl,
+                'value': record.value,
+                'dynamic': record.dynamic._data(),
+            },
+        )
+        record2 = Record.new(
+            desired,
+            'sub--www',
+            data={
+                'type': record._type,
+                'ttl': record.ttl,
+                'value': record.value,
+                'dynamic': record.dynamic._data(),
+            },
+        )
         desired.add_record(record1)
         desired.add_record(record2)
         changes = [Create(record1), Create(record2)]
         with self.assertRaises(AzureException) as ctx:
             provider._extra_changes(existing, desired, changes)
-            self.assertTrue(str(ctx)
-                            .startswith('Collision in Traffic Manager'))
+            self.assertTrue(str(ctx).startswith('Collision in Traffic Manager'))
 
     @patch('octodns_azure.AzureProvider._generate_traffic_managers')
     def test_extra_changes_non_last_fallback_contains_default(self, mock_gtm):
         provider = self._get_provider()
 
         desired = Zone(zone.name, sub_zones=[])
-        record = Record.new(desired, 'foo', {
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [{'value': 'one.unit.tests.'}],
-                        'fallback': 'def',
+        record = Record.new(
+            desired,
+            'foo',
+            {
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [{'value': 'one.unit.tests.'}],
+                            'fallback': 'def',
+                        },
+                        'def': {
+                            'values': [{'value': 'default.unit.tests.'}],
+                            'fallback': 'two',
+                        },
+                        'two': {'values': [{'value': 'two.unit.tests.'}]},
                     },
-                    'def': {
-                        'values': [{'value': 'default.unit.tests.'}],
-                        'fallback': 'two',
-                    },
-                    'two': {
-                        'values': [{'value': 'two.unit.tests.'}],
-                    },
+                    'rules': [{'pool': 'one'}],
                 },
-                'rules': [
-                    {'pool': 'one'},
-                ]
-            }
-        })
+            },
+        )
         desired.add_record(record)
         changes = [Create(record)]
 
@@ -1081,10 +1244,9 @@ class TestAzureDnsProvider(TestCase):
 
         # simulate duplicate endpoint and assert exception
         endpoint = Endpoint(target='dup.unit.tests.')
-        mock_gtm.return_value = [Profile(
-            name='test-profile',
-            endpoints=[endpoint, endpoint],
-        )]
+        mock_gtm.return_value = [
+            Profile(name='test-profile', endpoints=[endpoint, endpoint])
+        ]
         with self.assertRaises(AzureException) as ctx:
             provider._extra_changes(zone, desired, changes)
             self.assertTrue('duplicate endpoint' in str(ctx))
@@ -1092,21 +1254,19 @@ class TestAzureDnsProvider(TestCase):
     def test_extra_changes_A_multi_defaults(self):
         provider = self._get_provider()
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'A',
-            'ttl': 60,
-            'values': ['1.1.1.1', '8.8.8.8'],
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [{'value': '1.1.1.1'}],
-                    },
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'A',
+                'ttl': 60,
+                'values': ['1.1.1.1', '8.8.8.8'],
+                'dynamic': {
+                    'pools': {'one': {'values': [{'value': '1.1.1.1'}]}},
+                    'rules': [{'pool': 'one'}],
                 },
-                'rules': [
-                    {'pool': 'one'},
-                ],
-            }
-        })
+            },
+        )
 
         # test that extra changes doesn't show any changes
         desired = Zone(zone.name, sub_zones=[])
@@ -1139,10 +1299,14 @@ class TestAzureDnsProvider(TestCase):
         sub = provider._client_subscription_id
         rg = provider._resource_group
         expected_name = 'foo--unit--tests-rule-foobar'
-        expected_id = '/subscriptions/' + sub + \
-            '/resourceGroups/' + rg + \
-            '/providers/Microsoft.Network/trafficManagerProfiles/' + \
-            expected_name
+        expected_id = (
+            '/subscriptions/'
+            + sub
+            + '/resourceGroups/'
+            + rg
+            + '/providers/Microsoft.Network/trafficManagerProfiles/'
+            + expected_name
+        )
         self.assertEqual(profile.id, expected_id)
         self.assertEqual(profile.name, expected_name)
         self.assertEqual(profile.name, profile.dns_config.relative_name)
@@ -1152,11 +1316,11 @@ class TestAzureDnsProvider(TestCase):
 
         self.assertEqual(
             profile.endpoints[0].type,
-            'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+            'Microsoft.Network/trafficManagerProfiles/externalEndpoints',
         )
         self.assertEqual(
             profile.endpoints[1].type,
-            'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+            'Microsoft.Network/trafficManagerProfiles/nestedEndpoints',
         )
 
     def test_dynamic_record(self):
@@ -1171,8 +1335,7 @@ class TestAzureDnsProvider(TestCase):
 
         # check that dynamic record is populated back from profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1204,24 +1367,19 @@ class TestAzureDnsProvider(TestCase):
                 id=tm_id(tm_suffix),
                 name=tm_suffix,
                 traffic_routing_method='Geographic',
-                endpoints=[
-                    Endpoint(
-                        geo_mapping=['GEO-ME'],
-                    ),
-                ],
-            ),
+                endpoints=[Endpoint(geo_mapping=['GEO-ME'])],
+            )
         ]
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=tm_id(tm_suffix)),
+            ttl=60, target_resource=SubResource(id=tm_id(tm_suffix))
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
         with self.assertRaises(AzureException) as ctx:
             provider._populate_record(zone, azrecord)
-            self.assertTrue(str(ctx).startswith(
-                'Middle East (GEO-ME) is not supported'
-            ))
+            self.assertTrue(
+                str(ctx).startswith('Middle East (GEO-ME) is not supported')
+            )
 
         # valid profiles with Middle East test case
         provider, zone, record = self._get_dynamic_package()
@@ -1236,54 +1394,57 @@ class TestAzureDnsProvider(TestCase):
         provider = self._get_provider()
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [
-                            {'value': 'one.unit.tests.'},
-                        ],
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': 'one.unit.tests.'}]}
                     },
+                    'rules': [{'pool': 'one'}],
                 },
-                'rules': [
-                    {'pool': 'one'},
-                ],
-            }
-        })
+            },
+        )
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 1)
-        self.assertTrue(_profile_is_match(profiles[0], Profile(
-            name='foo--unit--tests',
-            traffic_routing_method='Priority',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests', ttl=60),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='one',
-                    type=external,
-                    target='one.unit.tests',
-                    priority=1,
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one',
+                            type=external,
+                            target='one.unit.tests',
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='--default--',
-                    type=external,
-                    target='default.unit.tests',
-                    priority=2,
-                ),
-            ],
-        )))
+            )
+        )
 
         # test that same record gets populated back from traffic managers
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1301,48 +1462,51 @@ class TestAzureDnsProvider(TestCase):
         provider = self._get_provider()
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'def': {
-                        'values': [
-                            {'value': 'default.unit.tests.'},
-                        ],
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'def': {'values': [{'value': 'default.unit.tests.'}]}
                     },
+                    'rules': [{'geos': ['AF'], 'pool': 'def'}],
                 },
-                'rules': [
-                    {'geos': ['AF'], 'pool': 'def'},
-                ],
-            }
-        })
+            },
+        )
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 1)
-        self.assertTrue(_profile_is_match(profiles[0], Profile(
-            name='foo--unit--tests',
-            traffic_routing_method='Geographic',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests', ttl=60),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='def--default--',
-                    type=external,
-                    target='default.unit.tests',
-                    geo_mapping=['GEO-AF'],
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Geographic',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='def--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            geo_mapping=['GEO-AF'],
+                        )
+                    ],
                 ),
-            ],
-        )))
+            )
+        )
 
         # test that same record gets populated back from traffic managers
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1361,84 +1525,97 @@ class TestAzureDnsProvider(TestCase):
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'rr': {
-                        'values': [
-                            {'value': 'one.unit.tests.'},
-                            {'value': 'two.unit.tests.'},
-                            {'value': 'default.unit.tests.'},
-                            {'value': 'final.unit.tests.'},
-                        ],
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'rr': {
+                            'values': [
+                                {'value': 'one.unit.tests.'},
+                                {'value': 'two.unit.tests.'},
+                                {'value': 'default.unit.tests.'},
+                                {'value': 'final.unit.tests.'},
+                            ]
+                        }
                     },
+                    'rules': [{'geos': ['AF'], 'pool': 'rr'}],
                 },
-                'rules': [
-                    {'geos': ['AF'], 'pool': 'rr'},
-                ],
-            }
-        })
+            },
+        )
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 2)
-        self.assertTrue(_profile_is_match(profiles[0], Profile(
-            name='foo--unit--tests-pool-rr',
-            traffic_routing_method='Weighted',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests-pool-rr', ttl=60),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='rr--one.unit.tests',
-                    type=external,
-                    target='one.unit.tests',
-                    weight=1,
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests-pool-rr',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-pool-rr', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr--one.unit.tests',
+                            type=external,
+                            target='one.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--two.unit.tests',
+                            type=external,
+                            target='two.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--default.unit.tests--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--final.unit.tests',
+                            type=external,
+                            target='final.unit.tests',
+                            weight=1,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='rr--two.unit.tests',
-                    type=external,
-                    target='two.unit.tests',
-                    weight=1,
+            )
+        )
+        self.assertTrue(
+            _profile_is_match(
+                profiles[1],
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Geographic',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr',
+                            type=nested,
+                            target_resource_id=profiles[0].id,
+                            geo_mapping=['GEO-AF'],
+                        )
+                    ],
                 ),
-                Endpoint(
-                    name='rr--default.unit.tests--default--',
-                    type=external,
-                    target='default.unit.tests',
-                    weight=1,
-                ),
-                Endpoint(
-                    name='rr--final.unit.tests',
-                    type=external,
-                    target='final.unit.tests',
-                    weight=1,
-                ),
-            ],
-        )))
-        self.assertTrue(_profile_is_match(profiles[1], Profile(
-            name='foo--unit--tests',
-            traffic_routing_method='Geographic',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests', ttl=60),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='rr',
-                    type=nested,
-                    target_resource_id=profiles[0].id,
-                    geo_mapping=['GEO-AF'],
-                ),
-            ],
-        )))
+            )
+        )
 
         # test that same record gets populated back from traffic managers
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1456,69 +1633,76 @@ class TestAzureDnsProvider(TestCase):
         provider = self._get_provider()
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'rr': {
-                        'values': [
-                            {'value': 'one.unit.tests.'},
-                            {'value': 'two.unit.tests.'},
-                            {'value': 'default.unit.tests.'},
-                            {'value': 'final.unit.tests.'},
-                        ],
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'rr': {
+                            'values': [
+                                {'value': 'one.unit.tests.'},
+                                {'value': 'two.unit.tests.'},
+                                {'value': 'default.unit.tests.'},
+                                {'value': 'final.unit.tests.'},
+                            ]
+                        }
                     },
+                    'rules': [{'pool': 'rr'}],
                 },
-                'rules': [
-                    {'pool': 'rr'},
-                ],
-            }
-        })
+            },
+        )
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 1)
-        self.assertTrue(_profile_is_match(profiles[0], Profile(
-            name='foo--unit--tests',
-            traffic_routing_method='Weighted',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests', ttl=60),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='rr--one.unit.tests',
-                    type=external,
-                    target='one.unit.tests',
-                    weight=1,
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr--one.unit.tests',
+                            type=external,
+                            target='one.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--two.unit.tests',
+                            type=external,
+                            target='two.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--default.unit.tests--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--final.unit.tests',
+                            type=external,
+                            target='final.unit.tests',
+                            weight=1,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='rr--two.unit.tests',
-                    type=external,
-                    target='two.unit.tests',
-                    weight=1,
-                ),
-                Endpoint(
-                    name='rr--default.unit.tests--default--',
-                    type=external,
-                    target='default.unit.tests',
-                    weight=1,
-                ),
-                Endpoint(
-                    name='rr--final.unit.tests',
-                    type=external,
-                    target='final.unit.tests',
-                    weight=1,
-                ),
-            ],
-        )))
+            )
+        )
 
         # test that same record gets populated back from traffic managers
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1537,96 +1721,107 @@ class TestAzureDnsProvider(TestCase):
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'cloud': {
-                        'values': [
-                            {'value': 'cloud.unit.tests.'},
-                        ],
-                        'fallback': 'rr',
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'cloud': {
+                            'values': [{'value': 'cloud.unit.tests.'}],
+                            'fallback': 'rr',
+                        },
+                        'rr': {
+                            'values': [
+                                {'value': 'one.unit.tests.'},
+                                {'value': 'two.unit.tests.'},
+                                {'value': 'default.unit.tests.'},
+                                {'value': 'final.unit.tests.'},
+                            ]
+                        },
                     },
-                    'rr': {
-                        'values': [
-                            {'value': 'one.unit.tests.'},
-                            {'value': 'two.unit.tests.'},
-                            {'value': 'default.unit.tests.'},
-                            {'value': 'final.unit.tests.'},
-                        ],
-                    },
+                    'rules': [{'pool': 'cloud'}],
                 },
-                'rules': [
-                    {'pool': 'cloud'},
-                ],
-            }
-        })
+            },
+        )
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 2)
-        self.assertTrue(_profile_is_match(profiles[0], Profile(
-            name='foo--unit--tests-pool-rr',
-            traffic_routing_method='Weighted',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests-pool-rr', ttl=60),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='rr--one.unit.tests',
-                    type=external,
-                    target='one.unit.tests',
-                    weight=1,
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests-pool-rr',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-pool-rr', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr--one.unit.tests',
+                            type=external,
+                            target='one.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--two.unit.tests',
+                            type=external,
+                            target='two.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--default.unit.tests--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='rr--final.unit.tests',
+                            type=external,
+                            target='final.unit.tests',
+                            weight=1,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='rr--two.unit.tests',
-                    type=external,
-                    target='two.unit.tests',
-                    weight=1,
+            )
+        )
+        self.assertTrue(
+            _profile_is_match(
+                profiles[1],
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='cloud',
+                            type=external,
+                            target='cloud.unit.tests',
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='rr',
+                            type=nested,
+                            target_resource_id=profiles[0].id,
+                            priority=2,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='rr--default.unit.tests--default--',
-                    type=external,
-                    target='default.unit.tests',
-                    weight=1,
-                ),
-                Endpoint(
-                    name='rr--final.unit.tests',
-                    type=external,
-                    target='final.unit.tests',
-                    weight=1,
-                ),
-            ],
-        )))
-        self.assertTrue(_profile_is_match(profiles[1], Profile(
-            name='foo--unit--tests',
-            traffic_routing_method='Priority',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests', ttl=60),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='cloud',
-                    type=external,
-                    target='cloud.unit.tests',
-                    priority=1,
-                ),
-                Endpoint(
-                    name='rr',
-                    type=nested,
-                    target_resource_id=profiles[0].id,
-                    priority=2,
-                ),
-            ],
-        )))
+            )
+        )
 
         # test that same record gets populated back from traffic managers
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1645,11 +1840,9 @@ class TestAzureDnsProvider(TestCase):
             'type': record._type,
             'ttl': record.ttl,
             'value': record.value,
-            'dynamic': record.dynamic._data()
+            'dynamic': record.dynamic._data(),
         }
-        record_names = [
-            'www.foo', 'www-foo'
-        ]
+        record_names = ['www.foo', 'www-foo']
         provider = self._get_provider()
 
         seen = set()
@@ -1665,75 +1858,76 @@ class TestAzureDnsProvider(TestCase):
         provider = self._get_provider()
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'sto': {
-                        'values': [
-                            {'value': 'sto.unit.tests.'},
-                        ],
-                        'fallback': 'iad',
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'sto': {
+                            'values': [{'value': 'sto.unit.tests.'}],
+                            'fallback': 'iad',
+                        },
+                        'iad': {
+                            'values': [{'value': 'iad.unit.tests.'}],
+                            'fallback': 'lhr',
+                        },
+                        'lhr': {'values': [{'value': 'lhr.unit.tests.'}]},
                     },
-                    'iad': {
-                        'values': [
-                            {'value': 'iad.unit.tests.'},
-                        ],
-                        'fallback': 'lhr',
-                    },
-                    'lhr': {
-                        'values': [
-                            {'value': 'lhr.unit.tests.'},
-                        ],
-                    },
+                    'rules': [
+                        {'geos': ['EU'], 'pool': 'iad'},
+                        {'geos': ['EU-GB'], 'pool': 'lhr'},
+                        {'geos': ['EU-SE'], 'pool': 'sto'},
+                        {'pool': 'lhr'},
+                    ],
                 },
-                'rules': [
-                    {'geos': ['EU'], 'pool': 'iad'},
-                    {'geos': ['EU-GB'], 'pool': 'lhr'},
-                    {'geos': ['EU-SE'], 'pool': 'sto'},
-                    {'pool': 'lhr'},
-                ],
-            }
-        })
+            },
+        )
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 4)
-        self.assertTrue(_profile_is_match(profiles[-1], Profile(
-            name='foo--unit--tests',
-            traffic_routing_method='Geographic',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests', ttl=record.ttl),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='iad',
-                    type=nested,
-                    target_resource_id=profiles[0].id,
-                    geo_mapping=['GEO-EU'],
+        self.assertTrue(
+            _profile_is_match(
+                profiles[-1],
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Geographic',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=record.ttl
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='iad',
+                            type=nested,
+                            target_resource_id=profiles[0].id,
+                            geo_mapping=['GEO-EU'],
+                        ),
+                        Endpoint(
+                            name='lhr',
+                            type=nested,
+                            target_resource_id=profiles[1].id,
+                            geo_mapping=['GB', 'WORLD'],
+                        ),
+                        Endpoint(
+                            name='sto',
+                            type=nested,
+                            target_resource_id=profiles[2].id,
+                            geo_mapping=['SE'],
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='lhr',
-                    type=nested,
-                    target_resource_id=profiles[1].id,
-                    geo_mapping=['GB', 'WORLD'],
-                ),
-                Endpoint(
-                    name='sto',
-                    type=nested,
-                    target_resource_id=profiles[2].id,
-                    geo_mapping=['SE'],
-                ),
-            ],
-        )))
+            )
+        )
 
         # test that same record gets populated back from traffic managers
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1751,42 +1945,46 @@ class TestAzureDnsProvider(TestCase):
         # statuses
         provider = self._get_provider()
         zone1 = Zone('unit.tests.', [])
-        record1 = Record.new(zone1, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 60,
-            'value': 'default.unit.tests.',
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [
-                            {'value': 'one1.unit.tests.', 'status': 'up'},
-                        ],
+        record1 = Record.new(
+            zone1,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [
+                                {'value': 'one1.unit.tests.', 'status': 'up'}
+                            ]
+                        },
+                        'two': {
+                            'values': [
+                                {'value': 'two1.unit.tests.', 'status': 'down'},
+                                {'value': 'two2.unit.tests.'},
+                            ]
+                        },
                     },
-                    'two': {
-                        'values': [
-                            {'value': 'two1.unit.tests.', 'status': 'down'},
-                            {'value': 'two2.unit.tests.'},
-                        ],
-                    },
+                    'rules': [{'geos': ['AS'], 'pool': 'one'}, {'pool': 'two'}],
                 },
-                'rules': [
-                    {'geos': ['AS'], 'pool': 'one'},
-                    {'pool': 'two'},
-                ],
-            }
-        })
+            },
+        )
         zone1.add_record(record1)
-        record_ns = Record.new(zone1, '', data={
-            'type': 'NS',
-            'ttl': 3600,
-            'values': ['ns1.azure-dns.org.', 'ns2.azur-dns.org.'],
-        })
+        record_ns = Record.new(
+            zone1,
+            '',
+            data={
+                'type': 'NS',
+                'ttl': 3600,
+                'values': ['ns1.azure-dns.org.', 'ns2.azur-dns.org.'],
+            },
+        )
         zone1.add_record(record_ns)
         zone2 = provider._process_desired_zone(zone1.copy())
         record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
         self.assertTrue(
-            record2.dynamic.pools['one'].data['values'][0]['status'],
-            'obey'
+            record2.dynamic.pools['one'].data['values'][0]['status'], 'obey'
         )
 
         record1.dynamic.pools['one'].data['values'][0]['status'] = 'down'
@@ -1799,8 +1997,7 @@ class TestAzureDnsProvider(TestCase):
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record1.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record1._type}'
@@ -1818,11 +2015,11 @@ class TestAzureDnsProvider(TestCase):
 
         # simple records should not get changed by _process_desired_zone
         zone1 = Zone(zone.name, sub_zones=[])
-        record1 = Record.new(zone1, 'foo', data={
-            'type': 'CNAME',
-            'ttl': 86400,
-            'value': 'one.unit.tests.',
-        })
+        record1 = Record.new(
+            zone1,
+            'foo',
+            data={'type': 'CNAME', 'ttl': 86400, 'value': 'one.unit.tests.'},
+        )
         zone1.add_record(record1)
         zone1.add_record(record_ns)
         zone2 = provider._process_desired_zone(zone1.copy())
@@ -1834,125 +2031,149 @@ class TestAzureDnsProvider(TestCase):
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'A',
-            'ttl': 60,
-            'values': ['9.9.9.9'],
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [
-                            {'value': '11.11.11.11'},
-                            {'value': '12.12.12.12'},
-                        ],
-                        'fallback': 'two'
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'A',
+                'ttl': 60,
+                'values': ['9.9.9.9'],
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [
+                                {'value': '11.11.11.11'},
+                                {'value': '12.12.12.12'},
+                            ],
+                            'fallback': 'two',
+                        },
+                        'two': {'values': [{'value': '2.2.2.2'}]},
                     },
-                    'two': {
-                        'values': [
-                            {'value': '2.2.2.2'},
-                        ],
-                    },
+                    'rules': [{'geos': ['AF'], 'pool': 'one'}, {'pool': 'two'}],
                 },
-                'rules': [
-                    {'geos': ['AF'], 'pool': 'one'},
-                    {'pool': 'two'},
-                ],
-            }
-        })
+            },
+        )
 
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 4)
-        self.assertTrue(_profile_is_match(profiles[0], Profile(
-            name='foo--unit--tests-A-pool-one',
-            traffic_routing_method='Weighted',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests-a-pool-one', ttl=record.ttl),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='one--11.11.11.11',
-                    type=external,
-                    target='11.11.11.11',
-                    weight=1,
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests-A-pool-one',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-a-pool-one',
+                        ttl=record.ttl,
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--11.11.11.11',
+                            type=external,
+                            target='11.11.11.11',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='one--12.12.12.12',
+                            type=external,
+                            target='12.12.12.12',
+                            weight=1,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='one--12.12.12.12',
-                    type=external,
-                    target='12.12.12.12',
-                    weight=1,
+            )
+        )
+        self.assertTrue(
+            _profile_is_match(
+                profiles[1],
+                Profile(
+                    name='foo--unit--tests-A-rule-one',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-a-rule-one',
+                        ttl=record.ttl,
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one',
+                            type=nested,
+                            target_resource_id=profiles[0].id,
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='two',
+                            type=external,
+                            target='2.2.2.2',
+                            priority=2,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='9.9.9.9',
+                            priority=3,
+                        ),
+                    ],
                 ),
-            ],
-        )))
-        self.assertTrue(_profile_is_match(profiles[1], Profile(
-            name='foo--unit--tests-A-rule-one',
-            traffic_routing_method='Priority',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests-a-rule-one', ttl=record.ttl),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='one',
-                    type=nested,
-                    target_resource_id=profiles[0].id,
-                    priority=1,
+            )
+        )
+        self.assertTrue(
+            _profile_is_match(
+                profiles[2],
+                Profile(
+                    name='foo--unit--tests-A-rule-two',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-a-rule-two',
+                        ttl=record.ttl,
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='two',
+                            type=external,
+                            target='2.2.2.2',
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='9.9.9.9',
+                            priority=2,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='two',
-                    type=external,
-                    target='2.2.2.2',
-                    priority=2,
+            )
+        )
+        self.assertTrue(
+            _profile_is_match(
+                profiles[3],
+                Profile(
+                    name='foo--unit--tests-A',
+                    traffic_routing_method='Geographic',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-a', ttl=record.ttl
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one',
+                            type=nested,
+                            target_resource_id=profiles[1].id,
+                            geo_mapping=['GEO-AF'],
+                        ),
+                        Endpoint(
+                            name='two',
+                            type=nested,
+                            target_resource_id=profiles[2].id,
+                            geo_mapping=['WORLD'],
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='--default--',
-                    type=external,
-                    target='9.9.9.9',
-                    priority=3,
-                ),
-            ],
-        )))
-        self.assertTrue(_profile_is_match(profiles[2], Profile(
-            name='foo--unit--tests-A-rule-two',
-            traffic_routing_method='Priority',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests-a-rule-two', ttl=record.ttl),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='two',
-                    type=external,
-                    target='2.2.2.2',
-                    priority=1,
-                ),
-                Endpoint(
-                    name='--default--',
-                    type=external,
-                    target='9.9.9.9',
-                    priority=2,
-                ),
-            ],
-        )))
-        self.assertTrue(_profile_is_match(profiles[3], Profile(
-            name='foo--unit--tests-A',
-            traffic_routing_method='Geographic',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests-a', ttl=record.ttl),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='one',
-                    type=nested,
-                    target_resource_id=profiles[1].id,
-                    geo_mapping=['GEO-AF'],
-                ),
-                Endpoint(
-                    name='two',
-                    type=nested,
-                    target_resource_id=profiles[2].id,
-                    geo_mapping=['WORLD'],
-                ),
-            ],
-        )))
+            )
+        )
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
@@ -1962,8 +2183,7 @@ class TestAzureDnsProvider(TestCase):
         create.assert_called_once()
 
         # test broken alias
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=None))
+        azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
         record2 = provider._populate_record(zone, azrecord, lenient=True)
@@ -1974,8 +2194,7 @@ class TestAzureDnsProvider(TestCase):
         tm_list.return_value = profiles
         provider._populate_traffic_managers()
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -1992,48 +2211,53 @@ class TestAzureDnsProvider(TestCase):
         provider = self._get_provider()
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
 
-        record = Record.new(zone, 'foo', data={
-            'type': 'AAAA',
-            'ttl': 60,
-            'values': ['1::1', '2::2'],
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [
-                            {'value': '1::1'},
-                            {'value': '2::2'},
-                        ],
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'AAAA',
+                'ttl': 60,
+                'values': ['1::1', '2::2'],
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [{'value': '1::1'}, {'value': '2::2'}]
+                        }
                     },
+                    'rules': [{'pool': 'one'}],
                 },
-                'rules': [
-                    {'pool': 'one'},
-                ],
-            }
-        })
+            },
+        )
         profiles = provider._generate_traffic_managers(record)
 
         self.assertEqual(len(profiles), 1)
-        self.assertTrue(_profile_is_match(profiles[0], Profile(
-            name='foo--unit--tests-AAAA',
-            traffic_routing_method='Weighted',
-            dns_config=DnsConfig(
-                relative_name='foo--unit--tests-aaaa', ttl=record.ttl),
-            monitor_config=_get_monitor(record),
-            endpoints=[
-                Endpoint(
-                    name='one--1--1--default--',
-                    type=external,
-                    target='1::1',
-                    weight=1,
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests-AAAA',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-aaaa', ttl=record.ttl
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--1--1--default--',
+                            type=external,
+                            target='1::1',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='one--2--2--default--',
+                            type=external,
+                            target='2::2',
+                            weight=1,
+                        ),
+                    ],
                 ),
-                Endpoint(
-                    name='one--2--2--default--',
-                    type=external,
-                    target='2::2',
-                    weight=1,
-                ),
-            ],
-        )))
+            )
+        )
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
@@ -2044,8 +2268,7 @@ class TestAzureDnsProvider(TestCase):
         create.assert_called_once()
 
         # test broken alias
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=None))
+        azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
         record2 = provider._populate_record(zone, azrecord, lenient=True)
@@ -2055,8 +2278,7 @@ class TestAzureDnsProvider(TestCase):
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
         azrecord = RecordSet(
-            ttl=60,
-            target_resource=SubResource(id=profiles[-1].id),
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
@@ -2077,7 +2299,9 @@ class TestAzureDnsProvider(TestCase):
 
         prefix = 'foo--unit--tests'
         expected_seen = {
-            prefix, f'{prefix}-pool-two', f'{prefix}-rule-one',
+            prefix,
+            f'{prefix}-pool-two',
+            f'{prefix}-rule-one',
             f'{prefix}-rule-two',
         }
 
@@ -2126,11 +2350,15 @@ class TestAzureDnsProvider(TestCase):
         # insert a non-matching profile
         sample_profile = self._get_tm_profiles(provider)[0]
         # dummy record for generating suffix
-        record2 = Record.new(zone, record.name + '2', data={
-            'type': record._type,
-            'ttl': record.ttl,
-            'value': record.value,
-        })
+        record2 = Record.new(
+            zone,
+            record.name + '2',
+            data={
+                'type': record._type,
+                'ttl': record.ttl,
+                'value': record.value,
+            },
+        )
         prefix2 = _root_traffic_manager_name(record2)
         tm_id = provider._profile_name_to_id
         extra_profile = Profile(
@@ -2147,10 +2375,15 @@ class TestAzureDnsProvider(TestCase):
 
         # implicitly asserts that non-matching profile is not included
         prefix = _root_traffic_manager_name(record)
-        self.assertEqual(provider._find_traffic_managers(record), {
-            prefix, f'{prefix}-pool-two', f'{prefix}-rule-one',
-            f'{prefix}-rule-two',
-        })
+        self.assertEqual(
+            provider._find_traffic_managers(record),
+            {
+                prefix,
+                f'{prefix}-pool-two',
+                f'{prefix}-rule-one',
+                f'{prefix}-rule-two',
+            },
+        )
 
     def test_traffic_manager_gc(self):
         provider, zone, record = self._get_dynamic_package()
@@ -2176,14 +2409,17 @@ class TestAzureDnsProvider(TestCase):
 
         expected_n = len(octo_records)
         half = int(expected_n / 2)
-        changes = [Create(r) for r in octo_records[:half]] + \
-            [Update(r, r) for r in octo_records[half:]]
+        changes = [Create(r) for r in octo_records[:half]] + [
+            Update(r, r) for r in octo_records[half:]
+        ]
         deletes = [Delete(r) for r in octo_records]
 
-        self.assertEqual(expected_n, provider.apply(Plan(None, zone,
-                                                         changes, True)))
-        self.assertEqual(expected_n, provider.apply(Plan(zone, zone,
-                                                         deletes, True)))
+        self.assertEqual(
+            expected_n, provider.apply(Plan(None, zone, changes, True))
+        )
+        self.assertEqual(
+            expected_n, provider.apply(Plan(zone, zone, deletes, True))
+        )
 
     def test_apply_create_dynamic(self):
         provider = self._get_provider()
@@ -2211,24 +2447,30 @@ class TestAzureDnsProvider(TestCase):
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = []
 
-        provider._required_root_ns_values['unit.tests'] = set((
-            'ns1-1.azure-dns.com.',
-            'ns1-1.azure-dns.info.',
-        ))
+        provider._required_root_ns_values['unit.tests'] = set(
+            ('ns1-1.azure-dns.com.', 'ns1-1.azure-dns.info.')
+        )
 
         # modification required
-        record = Record.new(zone, '', data={
-            'ttl': 3600,
-            'type': 'NS',
-            'values': ('ns1.unit.tests.', 'ns2.unit.tests.'),
-        })
+        record = Record.new(
+            zone,
+            '',
+            data={
+                'ttl': 3600,
+                'type': 'NS',
+                'values': ('ns1.unit.tests.', 'ns2.unit.tests.'),
+            },
+        )
 
         provider._apply_Create(Create(record))
 
         create = provider._dns_client.record_sets.create_or_update
         create.assert_called_once_with(
-            resource_group_name='mock_rg', zone_name='unit.tests',
-            relative_record_set_name='@', record_type='NS', parameters={
+            resource_group_name='mock_rg',
+            zone_name='unit.tests',
+            relative_record_set_name='@',
+            record_type='NS',
+            parameters={
                 'ns_records': [
                     NsRecord(nsdname='ns1-1.azure-dns.com.'),
                     NsRecord(nsdname='ns1-1.azure-dns.info.'),
@@ -2246,17 +2488,17 @@ class TestAzureDnsProvider(TestCase):
         tm_list.return_value = []
         profiles = self._get_tm_profiles(provider)
         dynamic_record = self._get_dynamic_record(zone)
-        simple_record = Record.new(zone, dynamic_record.name, data={
-            'type': 'CNAME',
-            'ttl': 3600,
-            'value': 'cname.unit.tests.',
-        })
+        simple_record = Record.new(
+            zone,
+            dynamic_record.name,
+            data={'type': 'CNAME', 'ttl': 3600, 'value': 'cname.unit.tests.'},
+        )
         change = Update(simple_record, dynamic_record)
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
         dns_update.assert_called_once()
@@ -2270,7 +2512,7 @@ class TestAzureDnsProvider(TestCase):
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
         dns_update.assert_called_once()
@@ -2286,7 +2528,7 @@ class TestAzureDnsProvider(TestCase):
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
         dns_update.assert_not_called()
@@ -2312,7 +2554,7 @@ class TestAzureDnsProvider(TestCase):
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
         dns_update.assert_not_called()
@@ -2321,7 +2563,8 @@ class TestAzureDnsProvider(TestCase):
         # both are dynamic but alias is broken
         provider, existing, record1 = self._get_dynamic_package()
         azrecord = RecordSet(
-            ttl=record1.ttl, target_resource=SubResource(id=None))
+            ttl=record1.ttl, target_resource=SubResource(id=None)
+        )
         azrecord.name = record1.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record1._type}'
 
@@ -2333,7 +2576,7 @@ class TestAzureDnsProvider(TestCase):
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
         dns_update.assert_called_once()
@@ -2342,41 +2585,40 @@ class TestAzureDnsProvider(TestCase):
     def test_apply_update_dynamic_A(self):
         # existing is simple, new is dynamic
         provider = self._get_provider()
-        simple_record = Record.new(zone, 'foo', data={
-            'type': 'A',
-            'ttl': 3600,
-            'values': ['1.1.1.1', '2.2.2.2'],
-        })
-        dynamic_record = Record.new(zone, simple_record.name, data={
-            'type': 'A',
-            'ttl': 60,
-            'values': ['1.1.1.1'],
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [
-                            {'value': '8.8.8.8'},
-                            {'value': '4.4.4.4'},
-                        ],
-                        'fallback': 'two',
+        simple_record = Record.new(
+            zone,
+            'foo',
+            data={'type': 'A', 'ttl': 3600, 'values': ['1.1.1.1', '2.2.2.2']},
+        )
+        dynamic_record = Record.new(
+            zone,
+            simple_record.name,
+            data={
+                'type': 'A',
+                'ttl': 60,
+                'values': ['1.1.1.1'],
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [
+                                {'value': '8.8.8.8'},
+                                {'value': '4.4.4.4'},
+                            ],
+                            'fallback': 'two',
+                        },
+                        'two': {'values': [{'value': '9.9.9.9'}]},
                     },
-                    'two': {
-                        'values': [{'value': '9.9.9.9'}],
-                    },
+                    'rules': [{'geos': ['AF'], 'pool': 'two'}, {'pool': 'one'}],
                 },
-                'rules': [
-                    {'geos': ['AF'], 'pool': 'two'},
-                    {'pool': 'one'},
-                ],
-            }
-        })
+            },
+        )
         num_tms = len(provider._generate_traffic_managers(dynamic_record))
         change = Update(simple_record, dynamic_record)
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, plus 1 at the end for nested
         # endpoints to workaround A/AAAA nesting limitation in Azure
@@ -2387,21 +2629,23 @@ class TestAzureDnsProvider(TestCase):
         # both are dynamic, healthcheck port is changed to trigger sync on
         # all profiles
         provider = self._get_provider()
-        dynamic_record2 = Record.new(zone, dynamic_record.name, data={
-            'type': dynamic_record._type,
-            'ttl': 300,
-            'values': dynamic_record.values,
-            'dynamic': dynamic_record.dynamic._data(),
-            'octodns': {
-                'healthcheck': {'port': 4433},
-            }
-        })
+        dynamic_record2 = Record.new(
+            zone,
+            dynamic_record.name,
+            data={
+                'type': dynamic_record._type,
+                'ttl': 300,
+                'values': dynamic_record.values,
+                'dynamic': dynamic_record.dynamic._data(),
+                'octodns': {'healthcheck': {'port': 4433}},
+            },
+        )
         change = Update(dynamic_record, dynamic_record2)
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, extra call at the end is not
         # needed when existing dynamic record is already aliased to its root
@@ -2413,29 +2657,31 @@ class TestAzureDnsProvider(TestCase):
     def test_apply_update_dynamic_A_singluar(self):
         # existing is simple, new is dynamic that needs only one profile
         provider = self._get_provider()
-        simple_record = Record.new(zone, 'foo', data={
-            'type': 'A',
-            'ttl': 3600,
-            'values': ['1.1.1.1', '2.2.2.2'],
-        })
-        dynamic_record = Record.new(zone, simple_record.name, data={
-            'type': 'A',
-            'ttl': 60,
-            'values': ['1.1.1.1'],
-            'dynamic': {
-                'pools': {
-                    'one': {
-                        'values': [
-                            {'value': '8.8.8.8'},
-                            {'value': '1.1.1.1'},
-                        ],
+        simple_record = Record.new(
+            zone,
+            'foo',
+            data={'type': 'A', 'ttl': 3600, 'values': ['1.1.1.1', '2.2.2.2']},
+        )
+        dynamic_record = Record.new(
+            zone,
+            simple_record.name,
+            data={
+                'type': 'A',
+                'ttl': 60,
+                'values': ['1.1.1.1'],
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [
+                                {'value': '8.8.8.8'},
+                                {'value': '1.1.1.1'},
+                            ]
+                        }
                     },
+                    'rules': [{'pool': 'one'}],
                 },
-                'rules': [
-                    {'pool': 'one'},
-                ],
-            }
-        })
+            },
+        )
         num_tms = len(provider._generate_traffic_managers(dynamic_record))
         self.assertEqual(num_tms, 1)
         change = Update(simple_record, dynamic_record)
@@ -2443,7 +2689,7 @@ class TestAzureDnsProvider(TestCase):
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
             provider._dns_client.record_sets.create_or_update,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, num_tms)
         dns_update.assert_called_once()
@@ -2457,7 +2703,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Delete(change)
         dns_delete, tm_delete = (
             provider._dns_client.record_sets.delete,
-            provider._tm_client.profiles.delete
+            provider._tm_client.profiles.delete,
         )
         dns_delete.assert_called_once()
         self.assertEqual(tm_delete.call_count, len(profiles))
@@ -2476,8 +2722,9 @@ class TestAzureDnsProvider(TestCase):
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         expected_n = len(octo_records)
-        self.assertEqual(expected_n, provider.apply(Plan(None, desired,
-                                                         changes, True)))
+        self.assertEqual(
+            expected_n, provider.apply(Plan(None, desired, changes, True))
+        )
 
     def test_check_zone_no_create(self):
         provider = self._get_provider()
@@ -2486,8 +2733,12 @@ class TestAzureDnsProvider(TestCase):
         recordSet = RecordSet(a_records=[ARecord(ipv4_address='1.1.1.1')])
         recordSet.name, recordSet.ttl, recordSet.type = 'a1', 0, 'A'
         rs.append(recordSet)
-        recordSet = RecordSet(a_records=[ARecord(ipv4_address='1.1.1.1'),
-                                         ARecord(ipv4_address='2.2.2.2')])
+        recordSet = RecordSet(
+            a_records=[
+                ARecord(ipv4_address='1.1.1.1'),
+                ARecord(ipv4_address='2.2.2.2'),
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
         rs.append(recordSet)
 
@@ -2512,12 +2763,13 @@ class TestAzureDnsProvider(TestCase):
 
         rs = []
 
-        recordSet = \
-            RecordSet(ns_records=[
+        recordSet = RecordSet(
+            ns_records=[
                 NsRecord(nsdname='ns1.unit.test.'),
                 NsRecord(nsdname='ns1-1.azure-dns.com.'),
                 NsRecord(nsdname='ns1-1.azure-dns.info.'),
-            ])
+            ]
+        )
         recordSet.name, recordSet.ttl, recordSet.type = '@', 9, 'NS'
         rs.append(recordSet)
 
@@ -2531,12 +2783,14 @@ class TestAzureDnsProvider(TestCase):
         # zone will exist and have a mixture of NS records
         zone = Zone('unit.test.', [])
         self.assertTrue(provider.populate(zone))
-        self.assertEqual({
-            'unit.test': set((
-                'ns1-1.azure-dns.com.',
-                'ns1-1.azure-dns.info.',
-            )),
-        }, provider._required_root_ns_values)
+        self.assertEqual(
+            {
+                'unit.test': set(
+                    ('ns1-1.azure-dns.com.', 'ns1-1.azure-dns.info.')
+                )
+            },
+            provider._required_root_ns_values,
+        )
 
     def test_check_zone_create_caches_root_ns(self):
         provider = self._get_provider()
@@ -2545,45 +2799,39 @@ class TestAzureDnsProvider(TestCase):
         self.assertFalse(provider._check_zone('some.zone.com'))
 
         test_zone = AzureZone(location='global')
-        test_zone.name_servers = ['ns1-1.azure-dns.com.',
-                                  'ns1-1.azure-dns.info.']
+        test_zone.name_servers = [
+            'ns1-1.azure-dns.com.',
+            'ns1-1.azure-dns.info.',
+        ]
         provider._dns_client.zones.create_or_update.return_value = test_zone
 
         # with create we'll fail to find it, create it, and grab it's root NS
         # record values
         self.assertTrue(provider._check_zone('unit.test', create=True))
-        self.assertEqual({
-            'unit.test': set((
-                'ns1-1.azure-dns.com.',
-                'ns1-1.azure-dns.info.',
-            )),
-        }, provider._required_root_ns_values)
+        self.assertEqual(
+            {
+                'unit.test': set(
+                    ('ns1-1.azure-dns.com.', 'ns1-1.azure-dns.info.')
+                )
+            },
+            provider._required_root_ns_values,
+        )
 
     def test_ensure_required_root_ns_values(self):
         provider = self._get_provider()
 
         # stuff some required values into the cache
-        required = set((
-            'ns1-1.azure-dns.com.',
-            'ns1-1.azure-dns.info.',
-        ))
-        provider._required_root_ns_values = {
-            'unit.test': required,
-        }
+        required = set(('ns1-1.azure-dns.com.', 'ns1-1.azure-dns.info.'))
+        provider._required_root_ns_values = {'unit.test': required}
 
         zone = Zone('unit.test.', [])
 
-        custom = set((
-            'ns1.unit.test.',
-            'ns2.unit.test.',
-        ))
+        custom = set(('ns1.unit.test.', 'ns2.unit.test.'))
 
         # no required values
-        record = Record.new(zone, '', data={
-            'ttl': 4,
-            'type': 'NS',
-            'values': list(custom),
-        })
+        record = Record.new(
+            zone, '', data={'ttl': 4, 'type': 'NS', 'values': list(custom)}
+        )
         ret, modified = provider._ensure_required_root_ns_values(record)
         self.assertTrue(modified)
         self.assertEqual(required | custom, set(ret.values))
@@ -2596,11 +2844,15 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(required | custom, set(ret.values))
 
         # has partial required
-        record = Record.new(zone, '', data={
-            'ttl': 4,
-            'type': 'NS',
-            'values': list(custom) + list(required)[1:],
-        })
+        record = Record.new(
+            zone,
+            '',
+            data={
+                'ttl': 4,
+                'type': 'NS',
+                'values': list(custom) + list(required)[1:],
+            },
+        )
         ret, modified = provider._ensure_required_root_ns_values(record)
         self.assertTrue(modified)
         self.assertEqual(required | custom, set(ret.values))
@@ -2612,11 +2864,15 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(required | custom, set(ret.values))
 
         # has everything that's required
-        record = Record.new(zone, '', data={
-            'ttl': 4,
-            'type': 'NS',
-            'values': list(custom) + list(required),
-        })
+        record = Record.new(
+            zone,
+            '',
+            data={
+                'ttl': 4,
+                'type': 'NS',
+                'values': list(custom) + list(required),
+            },
+        )
         ret, modified = provider._ensure_required_root_ns_values(record)
         # was not modified b/c it's already complete
         self.assertFalse(modified)
@@ -2627,11 +2883,9 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(id(zone), id(ret))
 
         # has just the required
-        record = Record.new(zone, '', data={
-            'ttl': 4,
-            'type': 'NS',
-            'values': list(required),
-        })
+        record = Record.new(
+            zone, '', data={'ttl': 4, 'type': 'NS', 'values': list(required)}
+        )
         ret, modified = provider._ensure_required_root_ns_values(record)
         # was not modified b/c it's already complete
         self.assertFalse(modified)
