@@ -28,6 +28,8 @@ from azure.mgmt.trafficmanager.models import (
     DnsConfig,
     MonitorConfig,
     Endpoint,
+    EndpointStatus,
+    AlwaysServe,
     MonitorConfigCustomHeadersItem,
 )
 
@@ -35,7 +37,11 @@ from octodns.record import Record, Update, GeoCodes
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
 
+import typing
+
 __VERSION__ = '0.0.3'
+
+OctoPoolValueStatus = typing.Literal["up", "down", "obey"]
 
 
 class AzureException(ProviderException):
@@ -459,14 +465,22 @@ def _profile_is_match(have, desired):
         desired_endpoints = desired.endpoints
     endpoints = zip(have_endpoints, desired_endpoints)
     for have_endpoint, desired_endpoint in endpoints:
-        have_status = have_endpoint.endpoint_status or 'Enabled'
-        desired_status = desired_endpoint.endpoint_status or 'Enabled'
+        have_status = have_endpoint.endpoint_status or EndpointStatus.ENABLED
+        desired_status = (
+            desired_endpoint.endpoint_status or EndpointStatus.ENABLED
+        )
+
+        have_always_serve = have_endpoint.always_serve or AlwaysServe.DISABLED
+        desired_always_serve = (
+            desired_endpoint.always_serve or AlwaysServe.DISABLED
+        )
 
         # compare basic attributes
         if (
             have_endpoint.name != desired_endpoint.name
             or have_endpoint.type != desired_endpoint.type
             or have_status != desired_status
+            or have_always_serve != desired_always_serve
         ):
             return false(have_endpoint, desired_endpoint, have.name)
 
@@ -507,6 +521,49 @@ def _profile_is_match(have, desired):
             return False
 
     return True
+
+
+def _azure_ep_as_to_octo_status(
+    endpoint_status: typing.Optional[EndpointStatus],
+    always_serve: typing.Optional[AlwaysServe],
+) -> OctoPoolValueStatus:
+
+    if endpoint_status is None:
+        endpoint_status = EndpointStatus.ENABLED
+    if always_serve is None:
+        always_serve = AlwaysServe.DISABLED
+
+    if endpoint_status == EndpointStatus.DISABLED:
+        # It doesn't matter what always_serve is if ep is disabled
+        return "down"
+    elif (
+        endpoint_status == EndpointStatus.ENABLED
+        and always_serve == AlwaysServe.DISABLED
+    ):
+        return "obey"
+    elif (
+        endpoint_status == EndpointStatus.ENABLED
+        and always_serve == AlwaysServe.ENABLED
+    ):
+        return "up"
+    else:
+        raise AzureException(
+            f"Unexpected endpoint_status ({endpoint_status})"
+            f" and always_serve ({always_serve}) combination"
+        )
+
+
+def _octo_status_to_azure_ep_as(
+    octo_status: OctoPoolValueStatus,
+) -> typing.Tuple[EndpointStatus, AlwaysServe,]:
+    if octo_status == "down":
+        return (EndpointStatus.DISABLED, AlwaysServe.DISABLED)
+    elif octo_status == "obey":
+        return (EndpointStatus.ENABLED, AlwaysServe.DISABLED)
+    elif octo_status == "up":
+        return (EndpointStatus.ENABLED, AlwaysServe.ENABLED)
+    else:
+        raise ValueError(f"Unexpected octo_status: {octo_status}")
 
 
 class AzureProvider(BaseProvider):
@@ -810,8 +867,19 @@ class AzureProvider(BaseProvider):
         record_name = azrecord.name if azrecord.name != '@' else ''
         typ = _parse_azure_type(azrecord.type)
 
-        data_for = getattr(self, f'_data_for_{typ}')
-        data = data_for(azrecord)
+        data_fors = {
+            "A": self._data_for_A,
+            "AAAA": self._data_for_AAAA,
+            "CAA": self._data_for_CAA,
+            "CNAME": self._data_for_CNAME,
+            "MX": self._data_for_MX,
+            "NS": self._data_for_NS,
+            "PTR": self._data_for_PTR,
+            "SRV": self._data_for_SRV,
+            "TXT": self._data_for_TXT,
+        }
+
+        data = data_fors[typ](azrecord)
         data['type'] = typ
         data['ttl'] = azrecord.ttl
         return Record.new(zone, record_name, data, source=self, lenient=lenient)
@@ -915,13 +983,16 @@ class AzureProvider(BaseProvider):
             ]
         }
 
-    def _get_geo_endpoints(self, root_profile):
+    def _get_geo_endpoints(self, root_profile: Profile):
         if root_profile.traffic_routing_method != 'Geographic':
             # This record does not use geo fencing, so we skip the Geographic
             # profile hop; let's pretend to be a geo-profile's only endpoint
+            first_ep = root_profile.endpoints[0]
             geo_ep = Endpoint(
-                name=root_profile.endpoints[0].name.split('--', 1)[0],
+                name=first_ep.name.split('--', 1)[0],
                 target_resource_id=root_profile.id,
+                endpoint_status=first_ep.endpoint_status,
+                always_serve=first_ep.always_serve,
             )
             geo_ep.target_resource = root_profile
             return [geo_ep]
@@ -1005,9 +1076,9 @@ class AzureProvider(BaseProvider):
                 defaults.add(val)
                 ep_name = ep_name[: -len('--default--')]
 
-            status = 'obey'
-            if pool_ep.endpoint_status == 'Disabled':
-                status = 'down'
+            status = _azure_ep_as_to_octo_status(
+                pool_ep.endpoint_status, pool_ep.always_serve
+            )
 
             values.append(
                 {'value': val, 'weight': pool_ep.weight or 1, 'status': status}
@@ -1141,31 +1212,6 @@ class AzureProvider(BaseProvider):
                     fallback = 'adding them'
                     self.supports_warn_or_except(msg, fallback)
                     desired.add_record(record, replace=True)
-            elif getattr(record, 'dynamic', False):
-                up_pools = []
-                for name, pool in record.dynamic.pools.items():
-                    for value in pool.data['values']:
-                        if value['status'] == 'up':
-                            # Azure only supports obey and down, not up
-                            up_pools.append(name)
-                            break
-                if not up_pools:
-                    continue
-
-                up_pools = ','.join(up_pools)
-                msg = (
-                    f'status=up is not supported for pools {up_pools} in '
-                    f'{record.fqdn}'
-                )
-                fallback = 'will ignore it and respect the healthcheck'
-                self.supports_warn_or_except(msg, fallback)
-
-                record = record.copy()
-                for pool in record.dynamic.pools.values():
-                    for value in pool.data['values']:
-                        if value['status'] == 'up':
-                            value['status'] = 'obey'
-                desired.add_record(record, replace=True)
 
         return super()._process_desired_zone(desired)
 
@@ -1312,13 +1358,15 @@ class AzureProvider(BaseProvider):
                 # mark default
                 ep_name += '--default--'
                 default_seen = True
-            ep_status = 'Disabled' if val['status'] == 'down' else 'Enabled'
+
+            ep_status, always_serve = _octo_status_to_azure_ep_as(val['status'])
             endpoints.append(
                 Endpoint(
                     name=ep_name,
                     target=target,
                     weight=val.get('weight', 1),
                     endpoint_status=ep_status,
+                    always_serve=always_serve,
                 )
             )
 
@@ -1348,10 +1396,15 @@ class AzureProvider(BaseProvider):
 
             # append pool to endpoint list of fallback rule profile
             return (
+                # This is a generated Endpoint, purely to manage child endpoints,
+                # so I think it's safe for it to use the default value of enabled
+                # and not always serve. It should listen to the children
                 Endpoint(
                     name=pool_name,
                     target_resource_id=pool_profile.id,
                     priority=priority,
+                    endpoint_status=EndpointStatus.ENABLED,
+                    always_serve=AlwaysServe.DISABLED,
                 ),
                 default_seen,
             )
@@ -1367,13 +1420,16 @@ class AzureProvider(BaseProvider):
                 # mark default
                 ep_name += '--default--'
                 default_seen = True
-            ep_status = 'Disabled' if value['status'] == 'down' else 'Enabled'
+            ep_status, always_serve = _octo_status_to_azure_ep_as(
+                value['status']
+            )
             return (
                 Endpoint(
                     name=ep_name,
                     target=target,
                     priority=priority,
                     endpoint_status=ep_status,
+                    always_serve=always_serve,
                 ),
                 default_seen,
             )
@@ -1389,10 +1445,13 @@ class AzureProvider(BaseProvider):
             traffic_managers.append(rule_profile)
 
             # append rule profile to top-level geo profile
+            # This endpoint exists to manage children, so the default is fine (I think)
             return Endpoint(
                 name=rule_name,
                 target_resource_id=rule_profile.id,
                 geo_mapping=geos,
+                endpoint_status=EndpointStatus.ENABLED,
+                always_serve=AlwaysServe.DISABLED,
             )
         else:
             # Priority profile has only one endpoint; skip the hop and append
@@ -1404,11 +1463,17 @@ class AzureProvider(BaseProvider):
                     name=rule_ep.name,
                     target_resource_id=rule_ep.target_resource_id,
                     geo_mapping=geos,
+                    endpoint_status=rule_ep.endpoint_status,
+                    always_serve=rule_ep.always_serve,
                 )
             else:
                 # just add the value of single-value pool
                 return Endpoint(
-                    name=rule_ep.name, target=rule_ep.target, geo_mapping=geos
+                    name=rule_ep.name,
+                    target=rule_ep.target,
+                    geo_mapping=geos,
+                    endpoint_status=rule_ep.endpoint_status,
+                    always_serve=rule_ep.always_serve,
                 )
 
     def _make_rule(
@@ -1448,8 +1513,16 @@ class AzureProvider(BaseProvider):
         # of rule profile
         if not default_seen:
             endpoints.append(
+                # I think it makes sense for the default to be 'obey'.
+                # That way, if all endpoints are down, Traffic Manager
+                # will default to assuming all endpoints are healthy
+                # https://learn.microsoft.com/en-us/azure/traffic-manager/traffic-manager-troubleshooting-degraded#understanding-traffic-manager-probes
                 Endpoint(
-                    name='--default--', target=defaults[0], priority=priority
+                    name='--default--',
+                    target=defaults[0],
+                    priority=priority,
+                    endpoint_status=EndpointStatus.ENABLED,
+                    always_serve=AlwaysServe.DISABLED,
                 )
             )
 

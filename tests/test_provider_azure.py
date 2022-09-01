@@ -25,6 +25,8 @@ from azure.mgmt.trafficmanager.models import (
     DnsConfig,
     MonitorConfig,
     Endpoint,
+    EndpointStatus,
+    AlwaysServe,
     MonitorConfigCustomHeadersItem,
 )
 from msrestazure.azure_exceptions import CloudError
@@ -36,6 +38,7 @@ from octodns.provider.base import Plan
 from octodns_azure import (
     _AzureRecord,
     AzureProvider,
+    _azure_ep_as_to_octo_status,
     _check_endswith_dot,
     _parse_azure_type,
     _root_traffic_manager_name,
@@ -514,6 +517,16 @@ class Test_CheckEndswithDot(TestCase):
             self.assertEqual(expected, _check_endswith_dot(test))
 
 
+class Test_AzureEpAsToOctoStatus(TestCase):
+    def test_azure_ep_as_to_octo_status_raises(self):
+        with self.assertRaisesRegex(
+            AzureException,
+            expected_regex=r"Unexpected endpoint_status .*",
+            msg="invalid (endpoint_status, always_serve) combo",
+        ):
+            _azure_ep_as_to_octo_status("bad_ep", "bad_as")
+
+
 class Test_RootTrafficManagerName(TestCase):
     def test_root_traffic_manager_name(self):
         test = Record.new(
@@ -584,6 +597,7 @@ class Test_ProfileIsMatch(TestCase):
             endpoint_name='name',
             endpoint_type='profile/nestedEndpoints',
             endpoint_status=None,
+            always_serve=None,
             target='target.unit.tests',
             target_id='resource/id',
             geos=['GEO-AF'],
@@ -608,6 +622,7 @@ class Test_ProfileIsMatch(TestCase):
                         name=endpoint_name,
                         type=endpoint_type,
                         endpoint_status=endpoint_status,
+                        always_serve=always_serve,
                         target=target,
                         target_resource_id=target_id,
                         geo_mapping=geos,
@@ -1993,6 +2008,19 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(profiles[0].endpoints[0].endpoint_status, 'Disabled')
         self.assertEqual(profiles[1].endpoints[0].endpoint_status, 'Disabled')
 
+        record1.dynamic.pools['one'].data['values'][0][
+            'status'
+        ] = 'not a real status'
+        with self.assertRaises(ValueError) as ctx:
+            provider._generate_traffic_managers(record1)
+            self.assertTrue(str(ctx).startswith("Unexpected octo_status"))
+
+        record1.dynamic.pools['one'].data['values'][0]['status'] = 'up'
+        profiles = provider._generate_traffic_managers(record1)
+        self.assertEqual(len(profiles), 4)
+        self.assertEqual(profiles[0].endpoints[0].endpoint_status, 'Enabled')
+        self.assertEqual(profiles[0].endpoints[0].always_serve, 'Enabled')
+
         # test that same record gets populated back from traffic managers
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = profiles
@@ -2282,6 +2310,166 @@ class TestAzureDnsProvider(TestCase):
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
+        record2 = provider._populate_record(zone, azrecord)
+        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
+
+        # test that extra changes doesn't show any changes
+        desired = Zone(zone.name, sub_zones=[])
+        desired.add_record(record)
+        changes = provider._extra_changes(zone, desired, [])
+        self.assertEqual(len(changes), 0)
+
+    def test_always_serve_disabled(self):
+        provider = self._get_provider()
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'AAAA',
+                'ttl': 60,
+                'values': ['1::1'],
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': '1::1', 'status': 'down'}]}
+                    },
+                    'rules': [{'pool': 'one'}],
+                },
+            },
+        )
+        profiles = provider._generate_traffic_managers(record)
+
+        self.assertEqual(len(profiles), 1)
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests-AAAA',
+                    traffic_routing_method='Geographic',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-aaaa', ttl=record.ttl
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--default--',
+                            type=external,
+                            target='1::1',
+                            weight=1,
+                            endpoint_status=EndpointStatus.DISABLED,
+                            always_serve=AlwaysServe.DISABLED,
+                            geo_mapping=['WORLD'],
+                        )
+                    ],
+                ),
+            )
+        )
+
+        # test that the record and ATM profile gets created
+        tm_sync = provider._tm_client.profiles.create_or_update
+        create = provider._dns_client.record_sets.create_or_update
+        provider._apply_Create(Create(record))
+        # A dynamic record can only have 1 profile
+        tm_sync.assert_called_once()
+        create.assert_called_once()
+
+        # test broken alias
+        azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
+        azrecord.name = record.name or '@'
+        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
+        record2 = provider._populate_record(zone, azrecord, lenient=True)
+        self.assertEqual(record2.values, [])
+
+        # test that same record gets populated back from traffic managers
+        tm_list = provider._tm_client.profiles.list_by_resource_group
+        tm_list.return_value = profiles
+        azrecord = RecordSet(
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
+        )
+        azrecord.name = record.name or '@'
+        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
+
+        record2 = provider._populate_record(zone, azrecord)
+        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
+
+        # test that extra changes doesn't show any changes
+        desired = Zone(zone.name, sub_zones=[])
+        desired.add_record(record)
+        changes = provider._extra_changes(zone, desired, [])
+        self.assertEqual(len(changes), 0)
+
+    def test_always_serve_enabled(self):
+        provider = self._get_provider()
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+
+        record = Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'AAAA',
+                'ttl': 60,
+                'values': ['1::1'],
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': '1::1', 'status': 'up'}]}
+                    },
+                    'rules': [{'pool': 'one'}],
+                },
+            },
+        )
+        profiles = provider._generate_traffic_managers(record)
+
+        self.assertEqual(len(profiles), 1)
+        self.assertTrue(
+            _profile_is_match(
+                profiles[0],
+                Profile(
+                    name='foo--unit--tests-AAAA',
+                    traffic_routing_method='Geographic',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-aaaa', ttl=record.ttl
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--default--',
+                            type=external,
+                            target='1::1',
+                            weight=1,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                            geo_mapping=['WORLD'],
+                        )
+                    ],
+                ),
+            )
+        )
+
+        # test that the record and ATM profile gets created
+        tm_sync = provider._tm_client.profiles.create_or_update
+        create = provider._dns_client.record_sets.create_or_update
+        provider._apply_Create(Create(record))
+        # A dynamic record can only have 1 profile
+        tm_sync.assert_called_once()
+        create.assert_called_once()
+
+        # test broken alias
+        azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
+        azrecord.name = record.name or '@'
+        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
+        record2 = provider._populate_record(zone, azrecord, lenient=True)
+        self.assertEqual(record2.values, [])
+
+        # test that same record gets populated back from traffic managers
+        tm_list = provider._tm_client.profiles.list_by_resource_group
+        tm_list.return_value = profiles
+        azrecord = RecordSet(
+            ttl=60, target_resource=SubResource(id=profiles[-1].id)
+        )
+        azrecord.name = record.name or '@'
+        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
+
         record2 = provider._populate_record(zone, azrecord)
         self.assertEqual(record2.dynamic._data(), record.dynamic._data())
 
