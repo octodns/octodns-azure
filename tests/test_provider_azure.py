@@ -38,7 +38,7 @@ from octodns.provider.base import Plan
 from octodns_azure import (
     _AzureRecord,
     AzureProvider,
-    _azure_ep_as_to_octo_status,
+    _azure_ep_alwaysserve_to_octo_status,
     _check_endswith_dot,
     _parse_azure_type,
     _root_traffic_manager_name,
@@ -524,7 +524,7 @@ class Test_AzureEpAsToOctoStatus(TestCase):
             expected_regex=r"Unexpected endpoint_status .*",
             msg="invalid (endpoint_status, always_serve) combo",
         ):
-            _azure_ep_as_to_octo_status("bad_ep", "bad_as")
+            _azure_ep_alwaysserve_to_octo_status("bad_ep", "bad_as")
 
 
 class Test_RootTrafficManagerName(TestCase):

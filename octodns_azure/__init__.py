@@ -37,11 +37,7 @@ from octodns.record import Record, Update, GeoCodes
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
 
-import typing
-
 __VERSION__ = '0.0.3'
-
-OctoPoolValueStatus = typing.Literal["up", "down", "obey"]
 
 
 class AzureException(ProviderException):
@@ -523,11 +519,8 @@ def _profile_is_match(have, desired):
     return True
 
 
-def _azure_ep_as_to_octo_status(
-    endpoint_status: typing.Optional[EndpointStatus],
-    always_serve: typing.Optional[AlwaysServe],
-) -> OctoPoolValueStatus:
-
+def _azure_ep_alwaysserve_to_octo_status(endpoint_status, always_serve):
+    """Convert between azure endpoint's endpoint_status and always_serve flags and octo's pool status flag"""
     if endpoint_status is None:
         endpoint_status = EndpointStatus.ENABLED
     if always_serve is None:
@@ -553,9 +546,8 @@ def _azure_ep_as_to_octo_status(
         )
 
 
-def _octo_status_to_azure_ep_as(
-    octo_status: OctoPoolValueStatus,
-) -> typing.Tuple[EndpointStatus, AlwaysServe,]:
+def _octo_status_to_azure_ep_alwaysserve(octo_status):
+    """Convert between octo's pool status flag abd azure endpoint's endpoint_status and always_serve flags"""
     if octo_status == "down":
         return (EndpointStatus.DISABLED, AlwaysServe.DISABLED)
     elif octo_status == "obey":
@@ -1076,7 +1068,7 @@ class AzureProvider(BaseProvider):
                 defaults.add(val)
                 ep_name = ep_name[: -len('--default--')]
 
-            status = _azure_ep_as_to_octo_status(
+            status = _azure_ep_alwaysserve_to_octo_status(
                 pool_ep.endpoint_status, pool_ep.always_serve
             )
 
@@ -1359,7 +1351,9 @@ class AzureProvider(BaseProvider):
                 ep_name += '--default--'
                 default_seen = True
 
-            ep_status, always_serve = _octo_status_to_azure_ep_as(val['status'])
+            ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
+                val['status']
+            )
             endpoints.append(
                 Endpoint(
                     name=ep_name,
@@ -1403,8 +1397,6 @@ class AzureProvider(BaseProvider):
                     name=pool_name,
                     target_resource_id=pool_profile.id,
                     priority=priority,
-                    endpoint_status=EndpointStatus.ENABLED,
-                    always_serve=AlwaysServe.DISABLED,
                 ),
                 default_seen,
             )
@@ -1420,7 +1412,7 @@ class AzureProvider(BaseProvider):
                 # mark default
                 ep_name += '--default--'
                 default_seen = True
-            ep_status, always_serve = _octo_status_to_azure_ep_as(
+            ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
                 value['status']
             )
             return (
@@ -1513,16 +1505,13 @@ class AzureProvider(BaseProvider):
         # of rule profile
         if not default_seen:
             endpoints.append(
-                # I think it makes sense for the default to be 'obey'.
-                # That way, if all endpoints are down, Traffic Manager
-                # will default to assuming all endpoints are healthy
-                # https://learn.microsoft.com/en-us/azure/traffic-manager/traffic-manager-troubleshooting-degraded#understanding-traffic-manager-probes
+                # Set the default to always serve
                 Endpoint(
                     name='--default--',
                     target=defaults[0],
                     priority=priority,
                     endpoint_status=EndpointStatus.ENABLED,
-                    always_serve=AlwaysServe.DISABLED,
+                    always_serve=AlwaysServe.DISABLED,  # TODO: changing this causes tests to fail. Let's do it in another commit
                 )
             )
 
