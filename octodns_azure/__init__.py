@@ -1511,7 +1511,7 @@ class AzureProvider(BaseProvider):
                     target=defaults[0],
                     priority=priority,
                     endpoint_status=EndpointStatus.ENABLED,
-                    always_serve=AlwaysServe.DISABLED,  # TODO: changing this causes tests to fail. Let's do it in another commit
+                    always_serve=AlwaysServe.ENABLED,  # TODO: changing this causes tests to fail. Let's do it in another commit
                 )
             )
 

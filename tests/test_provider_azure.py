@@ -849,6 +849,7 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='default.unit.tests',
                         priority=4,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -876,6 +877,7 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='default.unit.tests',
                         priority=3,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -1345,7 +1347,8 @@ class TestAzureDnsProvider(TestCase):
         # check that every profile is a match with what we expect
         expected_profiles = self._get_tm_profiles(provider)
         self.assertEqual(len(expected_profiles), len(profiles))
-        for have, expected in zip(profiles, expected_profiles):
+        profiles_to_compare = zip(profiles, expected_profiles)
+        for have, expected in profiles_to_compare:
             self.assertTrue(_profile_is_match(have, expected))
 
         # check that dynamic record is populated back from profiles
@@ -1449,6 +1452,7 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             priority=2,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
@@ -2142,6 +2146,7 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='9.9.9.9',
                             priority=3,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
@@ -2170,6 +2175,7 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='9.9.9.9',
                             priority=2,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
