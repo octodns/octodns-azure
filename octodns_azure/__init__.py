@@ -547,7 +547,7 @@ def _azure_ep_alwaysserve_to_octo_status(endpoint_status, always_serve):
 
 
 def _octo_status_to_azure_ep_alwaysserve(octo_status):
-    """Convert between octo's pool status flag abd azure endpoint's endpoint_status and always_serve flags"""
+    """Convert between octo's pool status flag and azure endpoint's endpoint_status and always_serve flags"""
     if octo_status == "down":
         return (EndpointStatus.DISABLED, AlwaysServe.DISABLED)
     elif octo_status == "obey":
@@ -975,7 +975,7 @@ class AzureProvider(BaseProvider):
             ]
         }
 
-    def _get_geo_endpoints(self, root_profile: Profile):
+    def _get_geo_endpoints(self, root_profile):
         if root_profile.traffic_routing_method != 'Geographic':
             # This record does not use geo fencing, so we skip the Geographic
             # profile hop; let's pretend to be a geo-profile's only endpoint
@@ -1390,9 +1390,6 @@ class AzureProvider(BaseProvider):
 
             # append pool to endpoint list of fallback rule profile
             return (
-                # This is a generated Endpoint, purely to manage child endpoints,
-                # so I think it's safe for it to use the default value of enabled
-                # and not always serve. It should listen to the children
                 Endpoint(
                     name=pool_name,
                     target_resource_id=pool_profile.id,
@@ -1442,8 +1439,6 @@ class AzureProvider(BaseProvider):
                 name=rule_name,
                 target_resource_id=rule_profile.id,
                 geo_mapping=geos,
-                endpoint_status=EndpointStatus.ENABLED,
-                always_serve=AlwaysServe.DISABLED,
             )
         else:
             # Priority profile has only one endpoint; skip the hop and append
@@ -1504,14 +1499,18 @@ class AzureProvider(BaseProvider):
         # append default endpoint unless it is already included in last pool
         # of rule profile
         if not default_seen:
+            # default should always be up
+            (
+                endpoint_status,
+                always_serve,
+            ) = _octo_status_to_azure_ep_alwaysserve('up')
             endpoints.append(
-                # Set the default to always serve
                 Endpoint(
                     name='--default--',
                     target=defaults[0],
                     priority=priority,
-                    endpoint_status=EndpointStatus.ENABLED,
-                    always_serve=AlwaysServe.ENABLED,  # TODO: changing this causes tests to fail. Let's do it in another commit
+                    endpoint_status=endpoint_status,
+                    always_serve=always_serve,
                 )
             )
 
