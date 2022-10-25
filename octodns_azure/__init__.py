@@ -580,23 +580,30 @@ class AzureProvider(BaseProvider):
         resource_group,
         client_total_retries=10,
         client_status_retries=3,
+        authority="https://login.microsoftonline.com",
+        base_url="https://management.azure.com",
         *args,
         **kwargs,
     ):
         self.log = getLogger(f'AzureProvider[{id}]')
         self.log.debug(
             '__init__: id=%s, client_id=%s, '
-            'key=***, directory_id:%s, client_total_retries:%d, '
+            'key=***, directory_id:%s, authority:%s, '
+            'base_url:%s, client_total_retries:%d, '
             'client_status_retries:%d',
             id,
             client_id,
             directory_id,
+            authority,
+            base_url,
             client_total_retries,
             client_status_retries,
         )
         super().__init__(id, *args, **kwargs)
 
         # Store necessary initialization params
+        self._authority = authority
+        self._base_url = base_url
         self._client_client_id = client_id
         self._client_key = key
         self._client_directory_id = directory_id
@@ -630,6 +637,7 @@ class AzureProvider(BaseProvider):
                 client_id=self._client_client_id,
                 client_secret=self._client_key,
                 tenant_id=self._client_directory_id,
+                authority=self._authority,
                 logger=logger,
             )
         return self.__client_credential
@@ -641,6 +649,7 @@ class AzureProvider(BaseProvider):
                 credential=self._client_credential,
                 subscription_id=self._client_subscription_id,
                 retry_policy=self._dns_client_retry_policy,
+                base_url=self._base_url,
             )
         return self.__dns_client
 
@@ -650,6 +659,7 @@ class AzureProvider(BaseProvider):
             self.__tm_client = TrafficManagerManagementClient(
                 credential=self._client_credential,
                 subscription_id=self._client_subscription_id,
+                base_url=self._base_url,
             )
         return self.__tm_client
 
