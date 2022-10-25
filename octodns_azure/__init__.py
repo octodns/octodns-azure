@@ -594,7 +594,7 @@ class AzureProvider(BaseProvider):
             client_total_retries,
             client_status_retries,
         )
-        super(AzureProvider, self).__init__(id, *args, **kwargs)
+        super().__init__(id, *args, **kwargs)
 
         # Store necessary initialization params
         self._client_client_id = client_id
