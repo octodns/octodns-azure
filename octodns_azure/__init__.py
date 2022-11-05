@@ -409,8 +409,6 @@ def _profile_is_match(have, desired):
         attr = have.__class__.__name__
         log('%s have.%s = %s', prefix, attr, have)
         log('%s desired.%s = %s', prefix, attr, desired)
-        print(f'{prefix}    have.{attr} = {have}')
-        print(f'{prefix} desired.{attr} = {desired}')
         return False
 
     # compare basic attributes
