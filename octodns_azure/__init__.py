@@ -1405,13 +1405,10 @@ class AzureProvider(BaseProvider):
                 )
             else:
                 # just add the value of single-value pool
-                # the pool value here is same as the default so we don't honor its status flag and force-set it to 'Enabled'
-                # TODO: also set status=up when the support lands
+                # the pool value here is same as the default so we don't honor its status flag
+                # TODO: set status=up when the support lands
                 return Endpoint(
-                    name=rule_ep.name,
-                    target=rule_ep.target,
-                    geo_mapping=geos,
-                    endpoint_status='Enabled',
+                    name=rule_ep.name, target=rule_ep.target, geo_mapping=geos
                 )
 
     def _make_rule(

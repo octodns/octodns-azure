@@ -1860,7 +1860,9 @@ class TestAzureDnsProvider(TestCase):
             },
         )
         profiles = provider._generate_traffic_managers(record)
-        self.assertEqual(profiles[-1].endpoints[0].endpoint_status, 'Enabled')
+        self.assertEqual(
+            profiles[-1].endpoints[0].endpoint_status or 'Enabled', 'Enabled'
+        )
 
     def test_dynamic_default_in_last_pool_down(self):
         provider = self._get_provider()
