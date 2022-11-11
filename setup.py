@@ -46,7 +46,8 @@ setup(
             'pyflakes>=2.2.0',
             'readme_renderer[md]>=26.0',
             'twine>=3.4.2',
-        )
+        ),
+        'test': tests_require,
     },
     install_requires=(
         'azure-identity>=1.7.1,<1.8.0',

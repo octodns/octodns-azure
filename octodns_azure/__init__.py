@@ -648,7 +648,7 @@ class AzureProvider(BaseProvider):
             client_total_retries,
             client_status_retries,
         )
-        super(AzureProvider, self).__init__(id, *args, **kwargs)
+        super().__init__(id, *args, **kwargs)
 
         # Store necessary initialization params
         self._authority = authority
@@ -1190,7 +1190,6 @@ class AzureProvider(BaseProvider):
         return record, modified
 
     def _process_desired_zone(self, desired):
-        # check for status=up values
         for record in desired.records:
             if record._type == 'NS' and record.name == '':
                 # We need to make sure the required root NS values are included
@@ -1335,7 +1334,6 @@ class AzureProvider(BaseProvider):
 
     def _make_pool_profile(self, pool, record, defaults):
         pool_name = pool._id
-        default_seen = False
 
         endpoints = []
         for val in pool.data['values']:
@@ -1346,14 +1344,16 @@ class AzureProvider(BaseProvider):
             ep_name = f'{pool_name}--{target}'
             # Endpoint names cannot have colons, drop them from IPv6 addresses
             ep_name = ep_name.replace(':', '-')
-            if target in defaults:
-                # mark default
-                ep_name += '--default--'
-                default_seen = True
-
             ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
                 val['status']
             )
+            if val['value'] in defaults and pool.data.get('fallback') is None:
+                # mark default
+                ep_name += '--default--'
+                # no fallback and pool includes default so we ignore the status flag and force set it to enabled
+                ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
+                    'up'
+                )
             endpoints.append(
                 Endpoint(
                     name=ep_name,
@@ -1364,63 +1364,61 @@ class AzureProvider(BaseProvider):
                 )
             )
 
-        pool_profile = self._generate_tm_profile(
+        return self._generate_tm_profile(
             'Weighted', endpoints, record, pool_name
         )
-
-        return pool_profile, default_seen
 
     def _make_pool(
         self, pool, priority, pool_profiles, record, defaults, traffic_managers
     ):
         pool_name = pool._id
         pool_values = pool.data['values']
-        default_seen = False
 
-        if len(pool_values) > 1:
+        if len(pool_values) > 1 or (
+            pool_values[0]['value'] in defaults and pool.data.get('fallback')
+        ):
             # create Weighted profile for multi-value pool
+            #
+            # or if a single-value pool has the default as its member but with another fallback pool
+            # ^^ is because a TM profile does not allow multiple endpoints for the same FQDN, so we
+            # branch off into a nested profile so we can add the default as the last priority endpoint.
             pool_profile = pool_profiles.get(pool_name)
-            # TODO: what if a cached pool_profile had seen the default
-            if pool_profile is None:
-                pool_profile, default_seen = self._make_pool_profile(
-                    pool, record, defaults
-                )
+            if not pool_profile:
+                pool_profile = self._make_pool_profile(pool, record, defaults)
                 traffic_managers.append(pool_profile)
                 pool_profiles[pool_name] = pool_profile
 
             # append pool to endpoint list of fallback rule profile
-            return (
-                Endpoint(
-                    name=pool_name,
-                    target_resource_id=pool_profile.id,
-                    priority=priority,
-                ),
-                default_seen,
+            return Endpoint(
+                name=pool_name,
+                target_resource_id=pool_profile.id,
+                priority=priority,
             )
         else:
             # Skip Weighted profile hop for single-value pool; append its
             # value as an external endpoint to fallback rule profile
             value = pool_values[0]
-            target = value['value']
-            if record._type == 'CNAME':
-                target = target[:-1]
             ep_name = pool_name
-            if target in defaults:
-                # mark default
-                ep_name += '--default--'
-                default_seen = True
             ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
                 value['status']
             )
-            return (
-                Endpoint(
-                    name=ep_name,
-                    target=target,
-                    priority=priority,
-                    endpoint_status=ep_status,
-                    always_serve=always_serve,
-                ),
-                default_seen,
+            target = value['value']
+            if target in defaults:
+                # mark default
+                ep_name += '--default--'
+                # ignore the status flag and force set it to enabled
+                ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
+                    'up'
+                )
+            # strip trailing dot from CNAME value
+            if record._type == 'CNAME':
+                target = target[:-1]
+            return Endpoint(
+                name=ep_name,
+                target=target,
+                priority=priority,
+                endpoint_status=ep_status,
+                always_serve=always_serve,
             )
 
     def _make_rule_profile(
@@ -1455,12 +1453,16 @@ class AzureProvider(BaseProvider):
                 )
             else:
                 # just add the value of single-value pool
+                # the pool value here is same as the default so we don't honor its status flag
+                ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
+                    'up'
+                )
                 return Endpoint(
                     name=rule_ep.name,
                     target=rule_ep.target,
                     geo_mapping=geos,
-                    endpoint_status=rule_ep.endpoint_status,
-                    always_serve=rule_ep.always_serve,
+                    endpoint_status=ep_status,
+                    always_serve=always_serve,
                 )
 
     def _make_rule(
@@ -1470,18 +1472,17 @@ class AzureProvider(BaseProvider):
         rule_name = pool_name
 
         if record._type == 'CNAME':
-            defaults = [record.value[:-1]]
+            defaults = [record.value]
         else:
             defaults = record.values
 
         priority = 1
-        default_seen = False
 
         while pool_name:
             # iterate until we reach end of fallback chain
             pool = record.dynamic.pools[pool_name]
 
-            rule_ep, saw_default = self._make_pool(
+            rule_ep = self._make_pool(
                 pool,
                 priority,
                 pool_profiles,
@@ -1490,26 +1491,25 @@ class AzureProvider(BaseProvider):
                 traffic_managers,
             )
             endpoints.append(rule_ep)
-            if saw_default:
-                default_seen = True
 
             priority += 1
             pool_name = pool.data.get('fallback')
 
         # append default endpoint unless it is already included in last pool
         # of rule profile
-        if not default_seen:
+        last_pool_values = [val['value'] for val in pool.data['values']]
+        if not any(val in defaults for val in last_pool_values):
+            default = defaults[0]
+            if record._type == 'CNAME':
+                default = default[:-1]
             # default should always be up
-            (
-                endpoint_status,
-                always_serve,
-            ) = _octo_status_to_azure_ep_alwaysserve('up')
+            ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve('up')
             endpoints.append(
                 Endpoint(
                     name='--default--',
-                    target=defaults[0],
+                    target=default,
                     priority=priority,
-                    endpoint_status=endpoint_status,
+                    endpoint_status=ep_status,
                     always_serve=always_serve,
                 )
             )
