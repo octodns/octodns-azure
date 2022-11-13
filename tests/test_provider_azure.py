@@ -2148,8 +2148,6 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(len(changes), 0)
 
     def test_dynamic_pool_status(self):
-        # test that traffic managers are generated as expected for pool value
-        # statuses
         provider = self._get_provider()
         zone1 = Zone('unit.tests.', [])
         record1 = Record.new(
@@ -2177,49 +2175,128 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
+
+        # status=up should be converted to obey
         zone1.add_record(record1)
-        record_ns = Record.new(
-            zone1,
-            '',
-            data={
-                'type': 'NS',
-                'ttl': 3600,
-                'values': ['ns1.azure-dns.org.', 'ns2.azur-dns.org.'],
-            },
-        )
-        zone1.add_record(record_ns)
         zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
+        record2 = list(zone2.records)[0]
         self.assertTrue(
             record2.dynamic.pools['one'].data['values'][0]['status'], 'obey'
         )
 
-        record1.dynamic.pools['one'].data['values'][0]['status'] = 'down'
-        profiles = provider._generate_traffic_managers(record1)
-        self.assertEqual(len(profiles), 4)
-        self.assertEqual(profiles[0].endpoints[0].endpoint_status, 'Disabled')
-        self.assertEqual(profiles[1].endpoints[0].endpoint_status, 'Disabled')
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record1.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record1._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record1.dynamic._data(), record2.dynamic._data())
+        # statuses are correctly converted to traffic manager profiles and back
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = provider._profile_name_to_id
+        profiles = [
+            Profile(
+                name='foo--unit--tests-rule-one',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-one', ttl=record2.ttl
+                ),
+                monitor_config=_get_monitor(record2),
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=external,
+                        target='one1.unit.tests',
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='default.unit.tests',
+                        priority=2,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-pool-two',
+                traffic_routing_method='Weighted',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-pool-two', ttl=record2.ttl
+                ),
+                monitor_config=_get_monitor(record2),
+                endpoints=[
+                    Endpoint(
+                        name='two--two1.unit.tests',
+                        type=external,
+                        target='two1.unit.tests',
+                        weight=1,
+                        endpoint_status='Disabled',
+                    ),
+                    Endpoint(
+                        name='two--two2.unit.tests',
+                        type=external,
+                        target='two2.unit.tests',
+                        weight=1,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-rule-two',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-two', ttl=record2.ttl
+                ),
+                monitor_config=_get_monitor(record2),
+                endpoints=[
+                    Endpoint(
+                        name='two',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-pool-two'
+                        ),
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='default.unit.tests',
+                        priority=2,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests',
+                traffic_routing_method='Geographic',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests', ttl=record2.ttl
+                ),
+                monitor_config=_get_monitor(record2),
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        geo_mapping=['GEO-AS', 'GEO-ME'],
+                    ),
+                    Endpoint(
+                        name='two',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-two'
+                        ),
+                        geo_mapping=['WORLD'],
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record2, profiles)
 
         # _process_desired_zone shouldn't change anything when status value is
         # supported
         zone1 = Zone(zone.name, sub_zones=[])
+        record1.dynamic.pools['one'].data['values'][0]['status'] = 'down'
         zone1.add_record(record1)
-        zone1.add_record(record_ns)
         zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
+        record2 = list(zone2.records)[0]
         self.assertTrue(record1.data, record2.data)
 
+    def test_simple_process_desired_zone(self):
         # simple records should not get changed by _process_desired_zone
         zone1 = Zone(zone.name, sub_zones=[])
         record1 = Record.new(
@@ -2228,9 +2305,8 @@ class TestAzureDnsProvider(TestCase):
             data={'type': 'CNAME', 'ttl': 86400, 'value': 'one.unit.tests.'},
         )
         zone1.add_record(record1)
-        zone1.add_record(record_ns)
-        zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
+        zone2 = self._get_provider()._process_desired_zone(zone1.copy())
+        record2 = list(zone2.records)[0]
         self.assertTrue(record1.data, record2.data)
 
     def test_dynamic_A(self):
