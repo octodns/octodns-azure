@@ -1364,7 +1364,7 @@ class AzureProvider(BaseProvider):
         ):
             # create Weighted profile for multi-value pool
             #
-            # or if a single-value pool has the default as its member and isn't enabled
+            # or if a single-value pool has the default as its member and it's status is not 'up'
             # ^^ is because a TM profile does not allow multiple endpoints for the same FQDN, so we
             # branch off into a nested profile so we can add the default as the last priority endpoint.
             pool_profile = pool_profiles.get(pool_name)
@@ -1413,7 +1413,6 @@ class AzureProvider(BaseProvider):
             traffic_managers.append(rule_profile)
 
             # append rule profile to top-level geo profile
-            # This endpoint exists to manage children, so the default is fine (I think)
             return Endpoint(
                 name=rule_name,
                 target_resource_id=rule_profile.id,
@@ -1429,8 +1428,6 @@ class AzureProvider(BaseProvider):
                     name=rule_ep.name,
                     target_resource_id=rule_ep.target_resource_id,
                     geo_mapping=geos,
-                    endpoint_status=rule_ep.endpoint_status,
-                    always_serve=rule_ep.always_serve,
                 )
             else:
                 # just add the value of single-value pool
@@ -1479,8 +1476,7 @@ class AzureProvider(BaseProvider):
             priority += 1
             pool_name = pool.data.get('fallback')
 
-        # append default endpoint unless it is already included in last pool
-        # of rule profile
+        # append default endpoint unless it is already included in a pool with status=up
         if not default_seen:
             default = defaults[0]
             if record._type == 'CNAME':
