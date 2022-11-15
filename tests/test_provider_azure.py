@@ -1340,18 +1340,28 @@ class TestAzureDnsProvider(TestCase):
             'Microsoft.Network/trafficManagerProfiles/nestedEndpoints',
         )
 
-    def test_dynamic_record(self):
-        provider, zone, record = self._get_dynamic_package()
-        profiles = provider._generate_traffic_managers(record)
+    def _validate_dynamic(self, record, expected_profiles):
+        '''
+        Takes a dynamic record as a test case and its corresponding expected profiles
+        Tests that:
+          1. expected profiles are generated from the given record
+          2. the profiles correctly populate the same record back
+          3. no extra changes are required
 
-        # check that every profile is a match with what we expect
-        expected_profiles = self._get_tm_profiles(provider)
+        This convenience method should be used to test various dynamic record test cases
+        '''
+        provider = self._get_provider()
+
+        # test that traffic managers profiles are generated as expected
+        profiles = provider._generate_traffic_managers(record)
         self.assertEqual(len(expected_profiles), len(profiles))
         profiles_to_compare = zip(profiles, expected_profiles)
         for have, expected in profiles_to_compare:
             self.assertTrue(_profile_is_match(have, expected))
 
         # check that dynamic record is populated back from profiles
+        tm_list = provider._tm_client.profiles.list_by_resource_group
+        tm_list.return_value = profiles
         azrecord = RecordSet(
             ttl=60, target_resource=SubResource(id=profiles[-1].id)
         )
@@ -1366,13 +1376,21 @@ class TestAzureDnsProvider(TestCase):
         changes = provider._extra_changes(zone, desired, [])
         self.assertEqual(len(changes), 0)
 
+    def test_dynamic_record(self):
+        provider, _, record = self._get_dynamic_package()
+        expected_profiles = self._get_tm_profiles(provider)
+        self._validate_dynamic(record, expected_profiles)
+
     def test_generate_traffic_managers_middle_east(self):
         # check Asia/Middle East test case
-        provider, zone, record = self._get_dynamic_package()
+        provider, _, record = self._get_dynamic_package()
         record.dynamic._data()['rules'][0]['geos'].append('AS')
-        profiles = provider._generate_traffic_managers(record)
-        self.assertIn('GEO-ME', profiles[-1].endpoints[0].geo_mapping)
-        self.assertIn('GEO-AS', profiles[-1].endpoints[0].geo_mapping)
+        record.dynamic._data()['rules'][0]['geos'].sort()
+        expected_profiles = self._get_tm_profiles(provider)
+        expected_profiles[-1].endpoints[0].geo_mapping.extend(
+            ['GEO-ME', 'GEO-AS']
+        )
+        self._validate_dynamic(record, expected_profiles)
 
     def test_populate_dynamic_middle_east(self):
         # Middle east without Asia raises exception
@@ -1408,8 +1426,6 @@ class TestAzureDnsProvider(TestCase):
         self.assertNotIn('ME', record.dynamic.rules[0].data['geos'])
 
     def test_dynamic_no_geo(self):
-        # test that traffic managers are generated as expected
-        provider = self._get_provider()
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
 
         record = Record.new(
@@ -1427,12 +1443,10 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 1)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Priority',
@@ -1455,32 +1469,11 @@ class TestAzureDnsProvider(TestCase):
                             always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
-                ),
-            )
+                )
+            ],
         )
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_dynamic_fallback_is_default(self):
-        # test that traffic managers are generated as expected
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-
         record = Record.new(
             zone,
             'foo',
@@ -1496,54 +1489,78 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 1)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
+        self._validate_dynamic(
+            record,
+            [
+                Profile(
+                    name='foo--unit--tests-pool-def',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-pool-def', ttl=60
+                    ),
+                    monitor_config=monitor,
+                    endpoints=[
+                        Endpoint(
+                            name='def--default.unit.tests',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                        )
+                    ],
+                ),
+                Profile(
+                    name='foo--unit--tests-rule-def',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-rule-def', ttl=60
+                    ),
+                    monitor_config=monitor,
+                    endpoints=[
+                        Endpoint(
+                            name='def',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-def'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                ),
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Geographic',
                     dns_config=DnsConfig(
                         relative_name='foo--unit--tests', ttl=60
                     ),
-                    monitor_config=_get_monitor(record),
+                    monitor_config=monitor,
                     endpoints=[
                         Endpoint(
-                            name='def--default--',
-                            type=external,
-                            target='default.unit.tests',
+                            name='def',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-rule-def'
+                            ),
                             geo_mapping=['GEO-AF'],
                         )
                     ],
                 ),
-            )
+            ],
         )
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_dynamic_pool_contains_default(self):
-        # test that traffic managers are generated as expected
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
-
         record = Record.new(
             zone,
             'foo',
@@ -1566,12 +1583,13 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 2)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
                     name='foo--unit--tests-pool-rr',
                     traffic_routing_method='Weighted',
@@ -1593,7 +1611,7 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests--default--',
+                            name='rr--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
@@ -1606,11 +1624,32 @@ class TestAzureDnsProvider(TestCase):
                         ),
                     ],
                 ),
-            )
-        )
-        self.assertTrue(
-            _profile_is_match(
-                profiles[1],
+                Profile(
+                    name='foo--unit--tests-rule-rr',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-rule-rr', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-rr'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                ),
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Geographic',
@@ -1622,36 +1661,17 @@ class TestAzureDnsProvider(TestCase):
                         Endpoint(
                             name='rr',
                             type=nested,
-                            target_resource_id=profiles[0].id,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-rule-rr'
+                            ),
                             geo_mapping=['GEO-AF'],
                         )
                     ],
                 ),
-            )
+            ],
         )
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_dynamic_pool_contains_default_no_geo(self):
-        # test that traffic managers are generated as expected
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-
         record = Record.new(
             zone,
             'foo',
@@ -1674,17 +1694,18 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 1)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
-                    name='foo--unit--tests',
+                    name='foo--unit--tests-pool-rr',
                     traffic_routing_method='Weighted',
                     dns_config=DnsConfig(
-                        relative_name='foo--unit--tests', ttl=60
+                        relative_name='foo--unit--tests-pool-rr', ttl=60
                     ),
                     monitor_config=_get_monitor(record),
                     endpoints=[
@@ -1701,7 +1722,7 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests--default--',
+                            name='rr--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
@@ -1714,32 +1735,36 @@ class TestAzureDnsProvider(TestCase):
                         ),
                     ],
                 ),
-            )
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-rr'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                ),
+            ],
         )
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_dynamic_last_pool_contains_default_no_geo(self):
-        # test that traffic managers are generated as expected
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
-
         record = Record.new(
             zone,
             'foo',
@@ -1766,12 +1791,13 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 2)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
                     name='foo--unit--tests-pool-rr',
                     traffic_routing_method='Weighted',
@@ -1793,7 +1819,7 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests--default--',
+                            name='rr--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
@@ -1806,11 +1832,6 @@ class TestAzureDnsProvider(TestCase):
                         ),
                     ],
                 ),
-            )
-        )
-        self.assertTrue(
-            _profile_is_match(
-                profiles[1],
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Priority',
@@ -1828,34 +1849,25 @@ class TestAzureDnsProvider(TestCase):
                         Endpoint(
                             name='rr',
                             type=nested,
-                            target_resource_id=profiles[0].id,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-rr'
+                            ),
                             priority=2,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=3,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
-            )
+            ],
         )
 
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
-
-    def test_dynamic_default_in_pool_down(self):
-        provider = self._get_provider()
-
+    def test_dynamic_last_pool_equals_default_down(self):
         record = Record.new(
             zone,
             'foo',
@@ -1874,95 +1886,63 @@ class TestAzureDnsProvider(TestCase):
                             ]
                         }
                     },
-                    'rules': [{'geos': ['AS'], 'pool': 'one'}],
+                    'rules': [{'pool': 'one'}],
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
-        self.assertEqual(
-            profiles[-1].endpoints[0].endpoint_status or 'Enabled', 'Enabled'
-        )
-
-    def test_dynamic_default_in_last_pool_down(self):
-        provider = self._get_provider()
-
-        record = Record.new(
-            zone,
-            'foo',
-            data={
-                'type': 'CNAME',
-                'ttl': 60,
-                'value': 'default.unit.tests.',
-                'dynamic': {
-                    'pools': {
-                        'cloud': {
-                            'values': [{'value': 'cloud.unit.tests.'}],
-                            'fallback': 'rr',
-                        },
-                        'rr': {
-                            'values': [
-                                {'value': 'a.unit.tests.'},
-                                {'value': 'b.unit.tests.'},
-                                {'value': 'c.unit.tests.'},
-                                {
-                                    'value': 'default.unit.tests.',
-                                    'status': 'down',
-                                },
-                            ]
-                        },
-                    },
-                    'rules': [{'pool': 'cloud'}],
-                },
-            },
-        )
-        profiles = provider._generate_traffic_managers(record)
-        self.assertEqual(profiles[0].endpoints[-1].target, 'default.unit.tests')
-        self.assertEqual(
-            profiles[0].endpoints[-1].endpoint_status or 'Enabled', 'Enabled'
-        )
-
-    def test_dynamic_reused_pool_with_default(self):
-        # test that default_seen is set correctly on re-using cached Weighted profile
-        provider = self._get_provider()
-
-        record = Record.new(
-            zone,
-            'foo',
-            data={
-                'type': 'CNAME',
-                'ttl': 60,
-                'value': 'default.unit.tests.',
-                'dynamic': {
-                    'pools': {
-                        'cloud': {
-                            'values': [{'value': 'cloud.unit.tests.'}],
-                            'fallback': 'rr',
-                        },
-                        'rr': {
-                            'values': [
-                                {'value': 'a.unit.tests.'},
-                                {'value': 'b.unit.tests.'},
-                                {'value': 'c.unit.tests.'},
-                                {'value': 'default.unit.tests.'},
-                            ]
-                        },
-                    },
-                    'rules': [
-                        {'geos': ['AS'], 'pool': 'cloud'},
-                        {'pool': 'rr'},
-                    ],
-                },
-            },
-        )
-        profiles = provider._generate_traffic_managers(record)
-        self.assertEqual(len(profiles), 3)
-
-    def test_dynamic_intermediate_pool_contains_default_no_geo(self):
-        # test that traffic managers are generated as expected
-        provider = self._get_provider()
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        self._validate_dynamic(
+            record,
+            [
+                Profile(
+                    name='foo--unit--tests-pool-one',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-pool-one', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--default.unit.tests',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                            endpoint_status='Disabled',
+                        )
+                    ],
+                ),
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-one'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                ),
+            ],
+        )
 
+    def test_dynamic_intermediate_pool_contains_default_no_geo(self):
         record = Record.new(
             zone,
             'foo',
@@ -1994,12 +1974,13 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 2)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
                     name='foo--unit--tests-pool-rr',
                     traffic_routing_method='Weighted',
@@ -2035,11 +2016,6 @@ class TestAzureDnsProvider(TestCase):
                         ),
                     ],
                 ),
-            )
-        )
-        self.assertTrue(
-            _profile_is_match(
-                profiles[1],
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Priority',
@@ -2057,7 +2033,9 @@ class TestAzureDnsProvider(TestCase):
                         Endpoint(
                             name='rr',
                             type=nested,
-                            target_resource_id=profiles[0].id,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-rr'
+                            ),
                             priority=2,
                         ),
                         Endpoint(
@@ -2071,35 +2049,15 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             priority=4,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
-            )
+            ],
         )
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_dynamic_intermediate_pool_equals_default_no_geo(self):
-        # test that traffic managers are generated as expected
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
-
         record = Record.new(
             zone,
             'foo',
@@ -2123,12 +2081,12 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
-
-        self.assertEqual(len(profiles), 2)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
                     name='foo--unit--tests-pool-two',
                     traffic_routing_method='Weighted',
@@ -2145,11 +2103,6 @@ class TestAzureDnsProvider(TestCase):
                         )
                     ],
                 ),
-            )
-        )
-        self.assertTrue(
-            _profile_is_match(
-                profiles[1],
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Priority',
@@ -2167,7 +2120,9 @@ class TestAzureDnsProvider(TestCase):
                         Endpoint(
                             name='two',
                             type=nested,
-                            target_resource_id=profiles[0].id,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-two'
+                            ),
                             priority=2,
                         ),
                         Endpoint(
@@ -2181,28 +2136,13 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             priority=4,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
-            )
+            ],
         )
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_dynamic_unique_traffic_managers(self):
         record = self._get_dynamic_record(zone)
@@ -2311,11 +2251,9 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(len(changes), 0)
 
     def test_dynamic_pool_status(self):
-        # test that traffic managers are generated as expected for pool value
-        # statuses
         provider = self._get_provider()
         zone1 = Zone('unit.tests.', [])
-        record1 = Record.new(
+        record = Record.new(
             zone1,
             'foo',
             data={
@@ -2340,62 +2278,132 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        zone1.add_record(record1)
-        record_ns = Record.new(
-            zone1,
-            '',
-            data={
-                'type': 'NS',
-                'ttl': 3600,
-                'values': ['ns1.azure-dns.org.', 'ns2.azur-dns.org.'],
-            },
-        )
-        zone1.add_record(record_ns)
-        zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
-        self.assertTrue(
-            record2.dynamic.pools['one'].data['values'][0]['status'], 'obey'
-        )
 
-        record1.dynamic.pools['one'].data['values'][0]['status'] = 'down'
-        profiles = provider._generate_traffic_managers(record1)
-        self.assertEqual(len(profiles), 4)
-        self.assertEqual(profiles[0].endpoints[0].endpoint_status, 'Disabled')
-        self.assertEqual(profiles[1].endpoints[0].endpoint_status, 'Disabled')
+        # statuses are correctly converted to traffic manager profiles and back
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = provider._profile_name_to_id
+        monitor = _get_monitor(record)
+        profiles = [
+            Profile(
+                name='foo--unit--tests-rule-one',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-one', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=external,
+                        target='one1.unit.tests',
+                        priority=1,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='default.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-pool-two',
+                traffic_routing_method='Weighted',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-pool-two', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='two--two1.unit.tests',
+                        type=external,
+                        target='two1.unit.tests',
+                        weight=1,
+                        endpoint_status='Disabled',
+                    ),
+                    Endpoint(
+                        name='two--two2.unit.tests',
+                        type=external,
+                        target='two2.unit.tests',
+                        weight=1,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-rule-two',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-two', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='two',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-pool-two'
+                        ),
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='default.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests',
+                traffic_routing_method='Geographic',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        geo_mapping=['GEO-AS', 'GEO-ME'],
+                    ),
+                    Endpoint(
+                        name='two',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-two'
+                        ),
+                        geo_mapping=['WORLD'],
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record, profiles)
 
-        record1.dynamic.pools['one'].data['values'][0][
-            'status'
-        ] = 'not a real status'
+        # invalid status should raise exception, although `Record` will not allow it in practice
+        record.dynamic.pools['one'].data['values'][0]['status'] = 'dummy'
         with self.assertRaises(ValueError) as ctx:
-            provider._generate_traffic_managers(record1)
+            provider._generate_traffic_managers(record)
             self.assertTrue(str(ctx).startswith("Unexpected octo_status"))
-
-        record1.dynamic.pools['one'].data['values'][0]['status'] = 'up'
-        profiles = provider._generate_traffic_managers(record1)
-        self.assertEqual(len(profiles), 4)
-        self.assertEqual(profiles[0].endpoints[0].endpoint_status, 'Enabled')
-        self.assertEqual(profiles[0].endpoints[0].always_serve, 'Enabled')
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record1.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record1._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record1.dynamic._data(), record2.dynamic._data())
 
         # _process_desired_zone shouldn't change anything when status value is
         # supported
         zone1 = Zone(zone.name, sub_zones=[])
-        zone1.add_record(record1)
-        zone1.add_record(record_ns)
+        record.dynamic.pools['one'].data['values'][0]['status'] = 'down'
+        zone1.add_record(record)
         zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
-        self.assertTrue(record1.data, record2.data)
+        record2 = list(zone2.records)[0]
+        self.assertTrue(record.data, record2.data)
 
+    def test_simple_process_desired_zone(self):
         # simple records should not get changed by _process_desired_zone
         zone1 = Zone(zone.name, sub_zones=[])
         record1 = Record.new(
@@ -2404,16 +2412,11 @@ class TestAzureDnsProvider(TestCase):
             data={'type': 'CNAME', 'ttl': 86400, 'value': 'one.unit.tests.'},
         )
         zone1.add_record(record1)
-        zone1.add_record(record_ns)
-        zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = [r for r in zone2.records if r._type == 'CNAME'][0]
+        zone2 = self._get_provider()._process_desired_zone(zone1.copy())
+        record2 = list(zone2.records)[0]
         self.assertTrue(record1.data, record2.data)
 
     def test_dynamic_A(self):
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
-
         record = Record.new(
             zone,
             'foo',
@@ -2437,133 +2440,119 @@ class TestAzureDnsProvider(TestCase):
             },
         )
 
-        profiles = provider._generate_traffic_managers(record)
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        profiles = [
+            Profile(
+                name='foo--unit--tests-A-pool-one',
+                traffic_routing_method='Weighted',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-a-pool-one', ttl=record.ttl
+                ),
+                monitor_config=_get_monitor(record),
+                endpoints=[
+                    Endpoint(
+                        name='one--11.11.11.11',
+                        type=external,
+                        target='11.11.11.11',
+                        weight=1,
+                    ),
+                    Endpoint(
+                        name='one--12.12.12.12',
+                        type=external,
+                        target='12.12.12.12',
+                        weight=1,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-A-rule-one',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-a-rule-one', ttl=record.ttl
+                ),
+                monitor_config=_get_monitor(record),
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-A-pool-one'
+                        ),
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='two', type=external, target='2.2.2.2', priority=2
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='9.9.9.9',
+                        priority=3,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-A-rule-two',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-a-rule-two', ttl=record.ttl
+                ),
+                monitor_config=_get_monitor(record),
+                endpoints=[
+                    Endpoint(
+                        name='two', type=external, target='2.2.2.2', priority=1
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='9.9.9.9',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-A',
+                traffic_routing_method='Geographic',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-a', ttl=record.ttl
+                ),
+                monitor_config=_get_monitor(record),
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-A-rule-one'
+                        ),
+                        geo_mapping=['GEO-AF'],
+                    ),
+                    Endpoint(
+                        name='two',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-A-rule-two'
+                        ),
+                        geo_mapping=['WORLD'],
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record, profiles)
 
-        self.assertEqual(len(profiles), 4)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
-                Profile(
-                    name='foo--unit--tests-A-pool-one',
-                    traffic_routing_method='Weighted',
-                    dns_config=DnsConfig(
-                        relative_name='foo--unit--tests-a-pool-one',
-                        ttl=record.ttl,
-                    ),
-                    monitor_config=_get_monitor(record),
-                    endpoints=[
-                        Endpoint(
-                            name='one--11.11.11.11',
-                            type=external,
-                            target='11.11.11.11',
-                            weight=1,
-                        ),
-                        Endpoint(
-                            name='one--12.12.12.12',
-                            type=external,
-                            target='12.12.12.12',
-                            weight=1,
-                        ),
-                    ],
-                ),
-            )
-        )
-        self.assertTrue(
-            _profile_is_match(
-                profiles[1],
-                Profile(
-                    name='foo--unit--tests-A-rule-one',
-                    traffic_routing_method='Priority',
-                    dns_config=DnsConfig(
-                        relative_name='foo--unit--tests-a-rule-one',
-                        ttl=record.ttl,
-                    ),
-                    monitor_config=_get_monitor(record),
-                    endpoints=[
-                        Endpoint(
-                            name='one',
-                            type=nested,
-                            target_resource_id=profiles[0].id,
-                            priority=1,
-                        ),
-                        Endpoint(
-                            name='two',
-                            type=external,
-                            target='2.2.2.2',
-                            priority=2,
-                        ),
-                        Endpoint(
-                            name='--default--',
-                            type=external,
-                            target='9.9.9.9',
-                            priority=3,
-                            always_serve=AlwaysServe.ENABLED,
-                        ),
-                    ],
-                ),
-            )
-        )
-        self.assertTrue(
-            _profile_is_match(
-                profiles[2],
-                Profile(
-                    name='foo--unit--tests-A-rule-two',
-                    traffic_routing_method='Priority',
-                    dns_config=DnsConfig(
-                        relative_name='foo--unit--tests-a-rule-two',
-                        ttl=record.ttl,
-                    ),
-                    monitor_config=_get_monitor(record),
-                    endpoints=[
-                        Endpoint(
-                            name='two',
-                            type=external,
-                            target='2.2.2.2',
-                            priority=1,
-                        ),
-                        Endpoint(
-                            name='--default--',
-                            type=external,
-                            target='9.9.9.9',
-                            priority=2,
-                            always_serve=AlwaysServe.ENABLED,
-                        ),
-                    ],
-                ),
-            )
-        )
-        self.assertTrue(
-            _profile_is_match(
-                profiles[3],
-                Profile(
-                    name='foo--unit--tests-A',
-                    traffic_routing_method='Geographic',
-                    dns_config=DnsConfig(
-                        relative_name='foo--unit--tests-a', ttl=record.ttl
-                    ),
-                    monitor_config=_get_monitor(record),
-                    endpoints=[
-                        Endpoint(
-                            name='one',
-                            type=nested,
-                            target_resource_id=profiles[1].id,
-                            geo_mapping=['GEO-AF'],
-                        ),
-                        Endpoint(
-                            name='two',
-                            type=nested,
-                            target_resource_id=profiles[2].id,
-                            geo_mapping=['WORLD'],
-                        ),
-                    ],
-                ),
-            )
-        )
+        provider = self._get_provider()
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
         create = provider._dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
+        # sync is called once for each profile, plus 1 at the end for nested
+        # endpoints to workaround A/AAAA nesting limitation in Azure
         self.assertEqual(tm_sync.call_count, len(profiles) + 1)
         create.assert_called_once()
 
@@ -2574,35 +2563,14 @@ class TestAzureDnsProvider(TestCase):
         record2 = provider._populate_record(zone, azrecord, lenient=True)
         self.assertEqual(record2.values, [])
 
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        provider._populate_traffic_managers()
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
-
     def test_dynamic_AAAA(self):
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-
         record = Record.new(
             zone,
             'foo',
             data={
                 'type': 'AAAA',
                 'ttl': 60,
-                'values': ['1::1', '2::2'],
+                'values': ['f::f'],
                 'dynamic': {
                     'pools': {
                         'one': {
@@ -2613,43 +2581,66 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
-
-        self.assertEqual(len(profiles), 1)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
-                Profile(
-                    name='foo--unit--tests-AAAA',
-                    traffic_routing_method='Weighted',
-                    dns_config=DnsConfig(
-                        relative_name='foo--unit--tests-aaaa', ttl=record.ttl
-                    ),
-                    monitor_config=_get_monitor(record),
-                    endpoints=[
-                        Endpoint(
-                            name='one--1--1--default--',
-                            type=external,
-                            target='1::1',
-                            weight=1,
-                        ),
-                        Endpoint(
-                            name='one--2--2--default--',
-                            type=external,
-                            target='2::2',
-                            weight=1,
-                        ),
-                    ],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
+        profiles = [
+            Profile(
+                name='foo--unit--tests-AAAA-pool-one',
+                traffic_routing_method='Weighted',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-aaaa-pool-one',
+                    ttl=record.ttl,
                 ),
-            )
-        )
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one--1--1', type=external, target='1::1', weight=1
+                    ),
+                    Endpoint(
+                        name='one--2--2', type=external, target='2::2', weight=1
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-AAAA',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-aaaa', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-AAAA-pool-one'
+                        ),
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='f::f',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record, profiles)
+
+        provider = self._get_provider()
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
         create = provider._dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
-        # A dynamic record can only have 1 profile
-        tm_sync.assert_called_once()
+        # sync is called once for each profile, plus 1 at the end for nested
+        # endpoints to workaround A/AAAA nesting limitation in Azure
+        self.assertEqual(tm_sync.call_count, len(profiles) + 1)
         create.assert_called_once()
 
         # test broken alias
@@ -2659,34 +2650,14 @@ class TestAzureDnsProvider(TestCase):
         record2 = provider._populate_record(zone, azrecord, lenient=True)
         self.assertEqual(record2.values, [])
 
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
-
     def test_always_serve_disabled(self):
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-
         record = Record.new(
             zone,
             'foo',
             data={
                 'type': 'AAAA',
                 'ttl': 60,
-                'values': ['1::1'],
+                'values': ['f::f'],
                 'dynamic': {
                     'pools': {
                         'one': {'values': [{'value': '1::1', 'status': 'down'}]}
@@ -2695,71 +2666,41 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 1)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
                     name='foo--unit--tests-AAAA',
-                    traffic_routing_method='Geographic',
+                    traffic_routing_method='Priority',
                     dns_config=DnsConfig(
                         relative_name='foo--unit--tests-aaaa', ttl=record.ttl
                     ),
                     monitor_config=_get_monitor(record),
                     endpoints=[
                         Endpoint(
-                            name='one--default--',
+                            name='one',
                             type=external,
                             target='1::1',
-                            weight=1,
+                            priority=1,
                             endpoint_status=EndpointStatus.DISABLED,
                             always_serve=AlwaysServe.DISABLED,
-                            geo_mapping=['WORLD'],
-                        )
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='f::f',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
                     ],
-                ),
-            )
+                )
+            ],
         )
-
-        # test that the record and ATM profile gets created
-        tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
-        provider._apply_Create(Create(record))
-        # A dynamic record can only have 1 profile
-        tm_sync.assert_called_once()
-        create.assert_called_once()
-
-        # test broken alias
-        azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord, lenient=True)
-        self.assertEqual(record2.values, [])
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_always_serve_enabled(self):
-        provider = self._get_provider()
-        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-
         record = Record.new(
             zone,
             'foo',
@@ -2775,12 +2716,11 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
 
-        self.assertEqual(len(profiles), 1)
-        self.assertTrue(
-            _profile_is_match(
-                profiles[0],
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        self._validate_dynamic(
+            record,
+            [
                 Profile(
                     name='foo--unit--tests-AAAA',
                     traffic_routing_method='Geographic',
@@ -2799,42 +2739,9 @@ class TestAzureDnsProvider(TestCase):
                             geo_mapping=['WORLD'],
                         )
                     ],
-                ),
-            )
+                )
+            ],
         )
-
-        # test that the record and ATM profile gets created
-        tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
-        provider._apply_Create(Create(record))
-        # A dynamic record can only have 1 profile
-        tm_sync.assert_called_once()
-        create.assert_called_once()
-
-        # test broken alias
-        azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord, lenient=True)
-        self.assertEqual(record2.values, [])
-
-        # test that same record gets populated back from traffic managers
-        tm_list = provider._tm_client.profiles.list_by_resource_group
-        tm_list.return_value = profiles
-        azrecord = RecordSet(
-            ttl=60, target_resource=SubResource(id=profiles[-1].id)
-        )
-        azrecord.name = record.name or '@'
-        azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-
-        record2 = provider._populate_record(zone, azrecord)
-        self.assertEqual(record2.dynamic._data(), record.dynamic._data())
-
-        # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
-        desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
-        self.assertEqual(len(changes), 0)
 
     def test_sync_traffic_managers(self):
         provider, zone, record = self._get_dynamic_package()
@@ -3219,7 +3126,7 @@ class TestAzureDnsProvider(TestCase):
                         'one': {
                             'values': [
                                 {'value': '8.8.8.8'},
-                                {'value': '1.1.1.1'},
+                                {'value': '1.1.1.1', 'status': 'up'},
                             ]
                         }
                     },
@@ -3227,8 +3134,38 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        num_tms = len(provider._generate_traffic_managers(dynamic_record))
-        self.assertEqual(num_tms, 1)
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        self._validate_dynamic(
+            dynamic_record,
+            [
+                Profile(
+                    name='foo--unit--tests-A',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-a',
+                        ttl=dynamic_record.ttl,
+                    ),
+                    monitor_config=_get_monitor(dynamic_record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--8.8.8.8',
+                            type=external,
+                            target='8.8.8.8',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='one--1.1.1.1--default--',
+                            type=external,
+                            target='1.1.1.1',
+                            weight=1,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                )
+            ],
+        )
+
         change = Update(simple_record, dynamic_record)
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
@@ -3236,7 +3173,7 @@ class TestAzureDnsProvider(TestCase):
             provider._dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
-        self.assertEqual(tm_sync.call_count, num_tms)
+        self.assertEqual(tm_sync.call_count, 1)
         dns_update.assert_called_once()
         tm_delete.assert_not_called()
 

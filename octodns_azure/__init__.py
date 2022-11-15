@@ -375,23 +375,11 @@ def _get_monitor(record):
 def _check_valid_dynamic(record):
     typ = record._type
     if typ in ['A', 'AAAA']:
-        defaults = set(record.values)
-        if len(defaults) > 1:
-            pools = record.dynamic.pools
-            vals = set(
-                v['value']
-                for _, pool in pools.items()
-                for v in pool._data()['values']
+        if len(record.values) > 1:
+            # we don't yet support multi-value defaults
+            raise AzureException(
+                f'{record.fqdn} {record._type}: Dynamic records do not support multiple top-level values'
             )
-            if defaults != vals:
-                # we don't yet support multi-value defaults, specifying all
-                # pool values allows for Traffic Manager profile optimization
-                raise AzureException(
-                    f'{record.fqdn} {record._type}: Values '
-                    'of A/AAAA dynamic records must either '
-                    'have a single value or contain all '
-                    'values from all pools'
-                )
     elif typ != 'CNAME':
         # dynamic records of unsupported type
         raise AzureException(
@@ -1347,13 +1335,9 @@ class AzureProvider(BaseProvider):
             ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
                 val['status']
             )
-            if val['value'] in defaults and pool.data.get('fallback') is None:
+            if val['value'] in defaults and val['status'] == 'up':
                 # mark default
                 ep_name += '--default--'
-                # no fallback and pool includes default so we ignore the status flag and force set it to enabled
-                ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
-                    'up'
-                )
             endpoints.append(
                 Endpoint(
                     name=ep_name,
@@ -1373,13 +1357,14 @@ class AzureProvider(BaseProvider):
     ):
         pool_name = pool._id
         pool_values = pool.data['values']
+        first_value = pool_values[0]
 
         if len(pool_values) > 1 or (
-            pool_values[0]['value'] in defaults and pool.data.get('fallback')
+            first_value['value'] in defaults and first_value['status'] != 'up'
         ):
             # create Weighted profile for multi-value pool
             #
-            # or if a single-value pool has the default as its member but with another fallback pool
+            # or if a single-value pool has the default as its member and isn't enabled
             # ^^ is because a TM profile does not allow multiple endpoints for the same FQDN, so we
             # branch off into a nested profile so we can add the default as the last priority endpoint.
             pool_profile = pool_profiles.get(pool_name)
@@ -1406,10 +1391,6 @@ class AzureProvider(BaseProvider):
             if target in defaults:
                 # mark default
                 ep_name += '--default--'
-                # ignore the status flag and force set it to enabled
-                ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
-                    'up'
-                )
             # strip trailing dot from CNAME value
             if record._type == 'CNAME':
                 target = target[:-1]
@@ -1453,16 +1434,12 @@ class AzureProvider(BaseProvider):
                 )
             else:
                 # just add the value of single-value pool
-                # the pool value here is same as the default so we don't honor its status flag
-                ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
-                    'up'
-                )
                 return Endpoint(
                     name=rule_ep.name,
                     target=rule_ep.target,
                     geo_mapping=geos,
-                    endpoint_status=ep_status,
-                    always_serve=always_serve,
+                    endpoint_status=rule_ep.endpoint_status,
+                    always_serve=rule_ep.always_serve,
                 )
 
     def _make_rule(
@@ -1476,6 +1453,7 @@ class AzureProvider(BaseProvider):
         else:
             defaults = record.values
 
+        default_seen = False
         priority = 1
 
         while pool_name:
@@ -1492,13 +1470,18 @@ class AzureProvider(BaseProvider):
             )
             endpoints.append(rule_ep)
 
+            if not default_seen and any(
+                val['value'] in defaults and val['status'] == 'up'
+                for val in pool.data['values']
+            ):
+                default_seen = True
+
             priority += 1
             pool_name = pool.data.get('fallback')
 
         # append default endpoint unless it is already included in last pool
         # of rule profile
-        last_pool_values = [val['value'] for val in pool.data['values']]
-        if not any(val in defaults for val in last_pool_values):
+        if not default_seen:
             default = defaults[0]
             if record._type == 'CNAME':
                 default = default[:-1]
