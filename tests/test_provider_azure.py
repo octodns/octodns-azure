@@ -645,7 +645,9 @@ class Test_ProfileIsMatch(TestCase):
         self.assertFalse(is_match(profile(), profile(endpoint_name='a')))
         self.assertFalse(is_match(profile(), profile(endpoint_type='b')))
         self.assertFalse(
-            is_match(profile(), profile(endpoint_status='Disabled'))
+            is_match(
+                profile(), profile(endpoint_status=EndpointStatus.DISABLED)
+            )
         )
         self.assertFalse(
             is_match(profile(endpoint_type='b'), profile(endpoint_type='b'))
@@ -1913,7 +1915,7 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             weight=1,
-                            endpoint_status='Disabled',
+                            endpoint_status=EndpointStatus.DISABLED,
                         )
                     ],
                 ),
@@ -2010,7 +2012,7 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             weight=1,
-                            endpoint_status='Disabled',
+                            endpoint_status=EndpointStatus.DISABLED,
                         ),
                         Endpoint(
                             name='rr--final.unit.tests',
@@ -2327,7 +2329,7 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='two1.unit.tests',
                         weight=1,
-                        endpoint_status='Disabled',
+                        endpoint_status=EndpointStatus.DISABLED,
                     ),
                     Endpoint(
                         name='two--two2.unit.tests',
