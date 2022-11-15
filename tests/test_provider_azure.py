@@ -1194,7 +1194,9 @@ class TestAzureDnsProvider(TestCase):
         changes = [Create(unsupported_dynamic)]
         with self.assertRaises(AzureException) as ctx:
             provider._extra_changes(existing, desired, changes)
-            self.assertTrue(str(ctx).endswith('must be of type CNAME'))
+        self.assertTrue(
+            str(ctx.exception).endswith('must be of type A/AAAA/CNAME')
+        )
         desired._remove_record(unsupported_dynamic)
 
         # test colliding ATM names throws exception
@@ -1223,7 +1225,9 @@ class TestAzureDnsProvider(TestCase):
         changes = [Create(record1), Create(record2)]
         with self.assertRaises(AzureException) as ctx:
             provider._extra_changes(existing, desired, changes)
-            self.assertTrue(str(ctx).startswith('Collision in Traffic Manager'))
+        self.assertTrue(
+            str(ctx.exception).startswith('Collision in Traffic Manager')
+        )
 
     @patch('octodns_azure.AzureProvider._generate_traffic_managers')
     def test_extra_changes_non_last_fallback_contains_default(self, mock_gtm):
@@ -1266,7 +1270,7 @@ class TestAzureDnsProvider(TestCase):
         ]
         with self.assertRaises(AzureException) as ctx:
             provider._extra_changes(zone, desired, changes)
-            self.assertTrue('duplicate endpoint' in str(ctx))
+        self.assertTrue('duplicate endpoint' in str(ctx.exception))
 
     def test_extra_changes_A_multi_defaults(self):
         provider = self._get_provider()
@@ -1290,7 +1294,7 @@ class TestAzureDnsProvider(TestCase):
         desired.add_record(record)
         with self.assertRaises(AzureException) as ctx:
             provider._extra_changes(zone, desired, [])
-            self.assertEqual('single value' in str(ctx))
+        self.assertTrue('multiple top-level values' in str(ctx.exception))
 
     def test_generate_tm_profile(self):
         provider, zone, record = self._get_dynamic_package()
@@ -1413,9 +1417,9 @@ class TestAzureDnsProvider(TestCase):
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
         with self.assertRaises(AzureException) as ctx:
             provider._populate_record(zone, azrecord)
-            self.assertTrue(
-                str(ctx).startswith('Middle East (GEO-ME) is not supported')
-            )
+        self.assertTrue(
+            'Middle East (GEO-ME) is not supported' in str(ctx.exception)
+        )
 
         # valid profiles with Middle East test case
         provider, zone, record = self._get_dynamic_package()
@@ -2392,7 +2396,7 @@ class TestAzureDnsProvider(TestCase):
         record.dynamic.pools['one'].data['values'][0]['status'] = 'dummy'
         with self.assertRaises(ValueError) as ctx:
             provider._generate_traffic_managers(record)
-            self.assertTrue(str(ctx).startswith("Unexpected octo_status"))
+        self.assertTrue(str(ctx.exception).startswith("Unexpected octo_status"))
 
         # _process_desired_zone shouldn't change anything when status value is
         # supported
