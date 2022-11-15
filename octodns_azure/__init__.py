@@ -1308,12 +1308,9 @@ class AzureProvider(BaseProvider):
             # Endpoint names cannot have colons, drop them from IPv6 addresses
             ep_name = ep_name.replace(':', '-')
             ep_status = 'Disabled' if val['status'] == 'down' else 'Enabled'
-            if val['value'] in defaults and pool.data.get('fallback') is None:
+            if val['value'] in defaults:
                 # mark default
                 ep_name += '--default--'
-                # no fallback and pool includes default so we ignore the status flag and force set it to enabled
-                # TODO: also set status=up when the support lands
-                ep_status = 'Enabled'
             endpoints.append(
                 Endpoint(
                     name=ep_name,
@@ -1332,15 +1329,17 @@ class AzureProvider(BaseProvider):
     ):
         pool_name = pool._id
         pool_values = pool.data['values']
+        first_value = pool_values[0]
 
         if len(pool_values) > 1 or (
-            pool_values[0]['value'] in defaults and pool.data.get('fallback')
+            first_value['value'] in defaults and first_value['status'] != 'obey'
         ):
             # create Weighted profile for multi-value pool
             #
-            # or if a single-value pool has the default as its member but with another fallback pool
+            # or if a single-value pool has the default as its member and isn't enabled
             # ^^ is because a TM profile does not allow multiple endpoints for the same FQDN, so we
             # branch off into a nested profile so we can add the default as the last priority endpoint.
+            # TODO: change `status!=obey` conditional to `status!=up` when the support lands
             pool_profile = pool_profiles.get(pool_name)
             if not pool_profile:
                 pool_profile = self._make_pool_profile(pool, record, defaults)
@@ -1363,9 +1362,6 @@ class AzureProvider(BaseProvider):
             if target in defaults:
                 # mark default
                 ep_name += '--default--'
-                # ignore the status flag and force set it to enabled
-                # TODO: also set status=up when the support lands
-                ep_status = 'Enabled'
             # strip trailing dot from CNAME value
             if record._type == 'CNAME':
                 target = target[:-1]
@@ -1405,10 +1401,11 @@ class AzureProvider(BaseProvider):
                 )
             else:
                 # just add the value of single-value pool
-                # the pool value here is same as the default so we don't honor its status flag
-                # TODO: set status=up when the support lands
                 return Endpoint(
-                    name=rule_ep.name, target=rule_ep.target, geo_mapping=geos
+                    name=rule_ep.name,
+                    target=rule_ep.target,
+                    geo_mapping=geos,
+                    endpoint_status=rule_ep.endpoint_status,
                 )
 
     def _make_rule(
@@ -1422,6 +1419,7 @@ class AzureProvider(BaseProvider):
         else:
             defaults = record.values
 
+        default_seen = False
         priority = 1
 
         while pool_name:
@@ -1438,13 +1436,19 @@ class AzureProvider(BaseProvider):
             )
             endpoints.append(rule_ep)
 
+            if not default_seen and any(
+                val['value'] in defaults and val['status'] == 'obey'
+                for val in pool.data['values']
+            ):
+                # TODO: change `status=obey` conditional to `status=up` when the support lands
+                default_seen = True
+
             priority += 1
             pool_name = pool.data.get('fallback')
 
         # append default endpoint unless it is already included in last pool
         # of rule profile
-        last_pool_values = [val['value'] for val in pool.data['values']]
-        if not any(val in defaults for val in last_pool_values):
+        if not default_seen:
             default = defaults[0]
             if record._type == 'CNAME':
                 default = default[:-1]

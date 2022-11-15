@@ -1739,9 +1739,7 @@ class TestAzureDnsProvider(TestCase):
             ],
         )
 
-    def test_dynamic_default_in_pool_down(self):
-        provider = self._get_provider()
-
+    def test_dynamic_last_pool_equals_default_down(self):
         record = Record.new(
             zone,
             'foo',
@@ -1760,88 +1758,59 @@ class TestAzureDnsProvider(TestCase):
                             ]
                         }
                     },
-                    'rules': [{'geos': ['AS'], 'pool': 'one'}],
+                    'rules': [{'pool': 'one'}],
                 },
             },
         )
-        profiles = provider._generate_traffic_managers(record)
-        self.assertEqual(
-            profiles[-1].endpoints[0].endpoint_status or 'Enabled', 'Enabled'
-        )
-
-    def test_dynamic_default_in_last_pool_down(self):
-        provider = self._get_provider()
-
-        record = Record.new(
-            zone,
-            'foo',
-            data={
-                'type': 'CNAME',
-                'ttl': 60,
-                'value': 'default.unit.tests.',
-                'dynamic': {
-                    'pools': {
-                        'cloud': {
-                            'values': [{'value': 'cloud.unit.tests.'}],
-                            'fallback': 'rr',
-                        },
-                        'rr': {
-                            'values': [
-                                {'value': 'a.unit.tests.'},
-                                {'value': 'b.unit.tests.'},
-                                {'value': 'c.unit.tests.'},
-                                {
-                                    'value': 'default.unit.tests.',
-                                    'status': 'down',
-                                },
-                            ]
-                        },
-                    },
-                    'rules': [{'pool': 'cloud'}],
-                },
-            },
-        )
-        profiles = provider._generate_traffic_managers(record)
-        self.assertEqual(profiles[0].endpoints[-1].target, 'default.unit.tests')
-        self.assertEqual(
-            profiles[0].endpoints[-1].endpoint_status or 'Enabled', 'Enabled'
-        )
-
-    def test_dynamic_reused_pool_with_default(self):
-        # test that default_seen is set correctly on re-using cached Weighted profile
-        provider = self._get_provider()
-
-        record = Record.new(
-            zone,
-            'foo',
-            data={
-                'type': 'CNAME',
-                'ttl': 60,
-                'value': 'default.unit.tests.',
-                'dynamic': {
-                    'pools': {
-                        'cloud': {
-                            'values': [{'value': 'cloud.unit.tests.'}],
-                            'fallback': 'rr',
-                        },
-                        'rr': {
-                            'values': [
-                                {'value': 'a.unit.tests.'},
-                                {'value': 'b.unit.tests.'},
-                                {'value': 'c.unit.tests.'},
-                                {'value': 'default.unit.tests.'},
-                            ]
-                        },
-                    },
-                    'rules': [
-                        {'geos': ['AS'], 'pool': 'cloud'},
-                        {'pool': 'rr'},
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        self._validate_dynamic(
+            record,
+            [
+                Profile(
+                    name='foo--unit--tests-pool-one',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-pool-one', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--default.unit.tests--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                            endpoint_status='Disabled',
+                        )
                     ],
-                },
-            },
+                ),
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-one'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                        ),
+                    ],
+                ),
+            ],
         )
-        profiles = provider._generate_traffic_managers(record)
-        self.assertEqual(len(profiles), 3)
 
     def test_dynamic_intermediate_pool_contains_default_no_geo(self):
         record = Record.new(
@@ -1903,7 +1872,7 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests',
+                            name='rr--default.unit.tests--default--',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
@@ -1981,27 +1950,9 @@ class TestAzureDnsProvider(TestCase):
             },
         )
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
-        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
-        name_to_id = self._get_provider()._profile_name_to_id
         self._validate_dynamic(
             record,
             [
-                Profile(
-                    name='foo--unit--tests-pool-two',
-                    traffic_routing_method='Weighted',
-                    dns_config=DnsConfig(
-                        relative_name='foo--unit--tests-pool-two', ttl=60
-                    ),
-                    monitor_config=_get_monitor(record),
-                    endpoints=[
-                        Endpoint(
-                            name='two--default.unit.tests',
-                            type=external,
-                            target='default.unit.tests',
-                            weight=1,
-                        )
-                    ],
-                ),
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Priority',
@@ -2017,11 +1968,9 @@ class TestAzureDnsProvider(TestCase):
                             priority=1,
                         ),
                         Endpoint(
-                            name='two',
-                            type=nested,
-                            target_resource_id=name_to_id(
-                                'foo--unit--tests-pool-two'
-                            ),
+                            name='two--default--',
+                            type=external,
+                            target='default.unit.tests',
                             priority=2,
                         ),
                         Endpoint(
@@ -2030,14 +1979,8 @@ class TestAzureDnsProvider(TestCase):
                             target='three.unit.tests',
                             priority=3,
                         ),
-                        Endpoint(
-                            name='--default--',
-                            type=external,
-                            target='default.unit.tests',
-                            priority=4,
-                        ),
                     ],
-                ),
+                )
             ],
         )
 
