@@ -847,19 +847,8 @@ class AzureProvider(BaseProvider):
         record_name = azrecord.name if azrecord.name != '@' else ''
         typ = _parse_azure_type(azrecord.type)
 
-        data_fors = {
-            "A": self._data_for_A,
-            "AAAA": self._data_for_AAAA,
-            "CAA": self._data_for_CAA,
-            "CNAME": self._data_for_CNAME,
-            "MX": self._data_for_MX,
-            "NS": self._data_for_NS,
-            "PTR": self._data_for_PTR,
-            "SRV": self._data_for_SRV,
-            "TXT": self._data_for_TXT,
-        }
-
-        data = data_fors[typ](azrecord)
+        data_for = getattr(self, f'_data_for_{typ}')
+        data = data_for(azrecord)
         data['type'] = typ
         data['ttl'] = azrecord.ttl
         return Record.new(zone, record_name, data, source=self, lenient=lenient)
