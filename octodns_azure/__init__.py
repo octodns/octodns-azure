@@ -967,12 +967,9 @@ class AzureProvider(BaseProvider):
         if root_profile.traffic_routing_method != 'Geographic':
             # This record does not use geo fencing, so we skip the Geographic
             # profile hop; let's pretend to be a geo-profile's only endpoint
-            first_ep = root_profile.endpoints[0]
             geo_ep = Endpoint(
-                name=first_ep.name.split('--', 1)[0],
+                name=root_profile.endpoints[0].name.split('--', 1)[0],
                 target_resource_id=root_profile.id,
-                endpoint_status=first_ep.endpoint_status,
-                always_serve=first_ep.always_serve,
             )
             geo_ep.target_resource = root_profile
             return [geo_ep]
