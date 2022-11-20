@@ -38,7 +38,6 @@ from octodns.provider.base import Plan
 from octodns_azure import (
     _AzureRecord,
     AzureProvider,
-    _azure_ep_alwaysserve_to_octo_status,
     _check_endswith_dot,
     _parse_azure_type,
     _root_traffic_manager_name,
@@ -515,16 +514,6 @@ class Test_CheckEndswithDot(TestCase):
             ['foo.bar.', 'foo.bar'],
         ]:
             self.assertEqual(expected, _check_endswith_dot(test))
-
-
-class Test_AzureEpAsToOctoStatus(TestCase):
-    def test_azure_ep_as_to_octo_status_raises(self):
-        with self.assertRaisesRegex(
-            AzureException,
-            expected_regex=r"Unexpected endpoint_status .*",
-            msg="invalid (endpoint_status, always_serve) combo",
-        ):
-            _azure_ep_alwaysserve_to_octo_status("bad_ep", "bad_as")
 
 
 class Test_RootTrafficManagerName(TestCase):
@@ -2393,12 +2382,6 @@ class TestAzureDnsProvider(TestCase):
             ),
         ]
         self._validate_dynamic(record, profiles)
-
-        # invalid status should raise exception, although `Record` will not allow it in practice
-        record.dynamic.pools['one'].data['values'][0]['status'] = 'dummy'
-        with self.assertRaises(ValueError) as ctx:
-            provider._generate_traffic_managers(record)
-        self.assertTrue(str(ctx.exception).startswith("Unexpected octo_status"))
 
         # _process_desired_zone shouldn't change anything when status value is
         # supported

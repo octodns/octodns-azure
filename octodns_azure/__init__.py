@@ -516,34 +516,21 @@ def _azure_ep_alwaysserve_to_octo_status(endpoint_status, always_serve):
 
     if endpoint_status == EndpointStatus.DISABLED:
         # It doesn't matter what always_serve is if ep is disabled
-        return "down"
-    elif (
-        endpoint_status == EndpointStatus.ENABLED
-        and always_serve == AlwaysServe.DISABLED
-    ):
-        return "obey"
-    elif (
-        endpoint_status == EndpointStatus.ENABLED
-        and always_serve == AlwaysServe.ENABLED
-    ):
-        return "up"
+        return 'down'
+    elif always_serve == AlwaysServe.ENABLED:
+        return 'up'
     else:
-        raise AzureException(
-            f"Unexpected endpoint_status ({endpoint_status})"
-            f" and always_serve ({always_serve}) combination"
-        )
+        return 'obey'
 
 
 def _octo_status_to_azure_ep_alwaysserve(octo_status):
     """Convert between octo's pool status flag and azure endpoint's endpoint_status and always_serve flags"""
-    if octo_status == "down":
-        return (EndpointStatus.DISABLED, AlwaysServe.DISABLED)
-    elif octo_status == "obey":
-        return (EndpointStatus.ENABLED, AlwaysServe.DISABLED)
-    elif octo_status == "up":
-        return (EndpointStatus.ENABLED, AlwaysServe.ENABLED)
-    else:
-        raise ValueError(f"Unexpected octo_status: {octo_status}")
+    status_map = {
+        'down': (EndpointStatus.DISABLED, AlwaysServe.DISABLED),
+        'up': (EndpointStatus.ENABLED, AlwaysServe.ENABLED),
+        'obey': (EndpointStatus.ENABLED, AlwaysServe.DISABLED),
+    }
+    return status_map[octo_status]
 
 
 class AzureProvider(BaseProvider):
