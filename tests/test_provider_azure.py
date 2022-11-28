@@ -688,6 +688,7 @@ class TestAzureDnsProvider(TestCase):
             'mock_directory',
             'mock_sub',
             'mock_rg',
+            strict_supports=False,
         )
 
         # Fetch the client to force it to load the creds
