@@ -6,36 +6,37 @@ from collections import defaultdict
 from functools import reduce
 from logging import getLogger
 
+from azure.core.pipeline.policies import RetryPolicy
 from azure.identity import ClientSecretCredential
 from azure.mgmt.dns import DnsManagementClient
-from azure.mgmt.trafficmanager import TrafficManagerManagementClient
-from azure.core.pipeline.policies import RetryPolicy
-
 from azure.mgmt.dns.models import (
-    ARecord,
     AaaaRecord,
+    ARecord,
     CaaRecord,
     CnameRecord,
     MxRecord,
-    SrvRecord,
     NsRecord,
     PtrRecord,
+    RecordSet,
+    SrvRecord,
+    SubResource,
     TxtRecord,
     Zone,
 )
+from azure.mgmt.trafficmanager import TrafficManagerManagementClient
+from azure.mgmt.trafficmanager import __version__ as trafficmanager_version
 from azure.mgmt.trafficmanager.models import (
-    Profile,
+    AlwaysServe,
     DnsConfig,
-    MonitorConfig,
     Endpoint,
     EndpointStatus,
-    AlwaysServe,
+    MonitorConfig,
     MonitorConfigCustomHeadersItem,
+    Profile,
 )
-
-from octodns.record import Record, Update, GeoCodes
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
+from octodns.record import GeoCodes, Record, Update
 
 __VERSION__ = '0.0.4'
 
@@ -602,11 +603,11 @@ class AzureProvider(BaseProvider):
         directory_id,
         sub_id,
         resource_group,
+        *args,
         client_total_retries=10,
         client_status_retries=3,
         authority="https://login.microsoftonline.com",
         base_url="https://management.azure.com",
-        *args,
         **kwargs,
     ):
         self.log = getLogger(f'AzureProvider[{id}]')
@@ -1581,6 +1582,34 @@ class AzureProvider(BaseProvider):
             )
             self._tm_client.profiles.delete(self._resource_group, profile_name)
 
+    def _create_or_update_record_sets(self, ar: _AzureRecord):
+        """Send record set create_or_update (creating/attaching records/TMs to the DNS zone).
+
+        Includes an adjustment for traffic mananager API version 1.1.0b1
+        """
+        create = self._dns_client.record_sets.create_or_update
+
+        # new version of traffic manager throws the following unless you use the id
+        # for the target_resource
+        # AttributeError: 'Profile' object has no attribute 'validate'
+        if trafficmanager_version == '1.1.0b1' and isinstance(
+            ar.params.get("target_resource", None), Profile
+        ):
+            params = RecordSet(
+                target_resource=SubResource(id=ar.params["target_resource"].id),
+                ttl=ar.params["ttl"],
+            )
+        else:
+            params = ar.params
+
+        create(
+            resource_group_name=ar.resource_group,
+            zone_name=ar.zone_name,
+            relative_record_set_name=ar.relative_record_set_name,
+            record_type=ar.record_type,
+            parameters=params,
+        )
+
     def _apply_Create(self, change):
         '''A record from change must be created.
 
@@ -1622,15 +1651,7 @@ class AzureProvider(BaseProvider):
         ar = _AzureRecord(
             self._resource_group, record, traffic_manager=root_profile
         )
-        create = self._dns_client.record_sets.create_or_update
-
-        create(
-            resource_group_name=ar.resource_group,
-            zone_name=ar.zone_name,
-            relative_record_set_name=ar.relative_record_set_name,
-            record_type=ar.record_type,
-            parameters=ar.params,
-        )
+        self._create_or_update_record_sets(ar)
 
         if endpoints:
             # add nested endpoints for A/AAAA dynamic record limitation after
@@ -1683,15 +1704,7 @@ class AzureProvider(BaseProvider):
             ar = _AzureRecord(
                 self._resource_group, new, traffic_manager=profile
             )
-            update = self._dns_client.record_sets.create_or_update
-
-            update(
-                resource_group_name=ar.resource_group,
-                zone_name=ar.zone_name,
-                relative_record_set_name=ar.relative_record_set_name,
-                record_type=ar.record_type,
-                parameters=ar.params,
-            )
+            self._create_or_update_record_sets(ar)
 
         if new_is_dynamic:
             # add any pending nested endpoints
