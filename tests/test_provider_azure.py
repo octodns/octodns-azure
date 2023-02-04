@@ -3,45 +3,45 @@
 #
 
 from unittest import TestCase
-from unittest.mock import Mock, patch, call
+from unittest.mock import Mock, call, patch
 
 from azure.mgmt.dns.models import (
-    ARecord,
     AaaaRecord,
+    ARecord,
     CaaRecord,
     CnameRecord,
     MxRecord,
-    SrvRecord,
     NsRecord,
     PtrRecord,
-    TxtRecord,
     RecordSet,
     SoaRecord,
+    SrvRecord,
     SubResource,
-    Zone as AzureZone,
+    TxtRecord,
 )
+from azure.mgmt.dns.models import Zone as AzureZone
 from azure.mgmt.trafficmanager.models import (
-    Profile,
     DnsConfig,
-    MonitorConfig,
     Endpoint,
+    MonitorConfig,
     MonitorConfigCustomHeadersItem,
+    Profile,
 )
 from msrestazure.azure_exceptions import CloudError
 
-from octodns.record import Create, Update, Delete, Record
-from octodns.zone import Zone
 from octodns.provider.base import Plan
+from octodns.record import Create, Delete, Record, Update
+from octodns.zone import Zone
 
 from octodns_azure import (
-    _AzureRecord,
-    AzureProvider,
-    _check_endswith_dot,
-    _parse_azure_type,
-    _root_traffic_manager_name,
-    _get_monitor,
-    _profile_is_match,
     AzureException,
+    AzureProvider,
+    _AzureRecord,
+    _check_endswith_dot,
+    _get_monitor,
+    _parse_azure_type,
+    _profile_is_match,
+    _root_traffic_manager_name,
 )
 
 zone = Zone(name='unit.tests.', sub_zones=[])

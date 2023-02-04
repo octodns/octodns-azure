@@ -6,34 +6,33 @@ from collections import defaultdict
 from functools import reduce
 from logging import getLogger
 
+from azure.core.pipeline.policies import RetryPolicy
 from azure.identity import ClientSecretCredential
 from azure.mgmt.dns import DnsManagementClient
-from azure.mgmt.trafficmanager import TrafficManagerManagementClient
-from azure.core.pipeline.policies import RetryPolicy
-
 from azure.mgmt.dns.models import (
-    ARecord,
     AaaaRecord,
+    ARecord,
     CaaRecord,
     CnameRecord,
     MxRecord,
-    SrvRecord,
     NsRecord,
     PtrRecord,
+    SrvRecord,
     TxtRecord,
     Zone,
 )
+from azure.mgmt.trafficmanager import TrafficManagerManagementClient
 from azure.mgmt.trafficmanager.models import (
-    Profile,
     DnsConfig,
-    MonitorConfig,
     Endpoint,
+    MonitorConfig,
     MonitorConfigCustomHeadersItem,
+    Profile,
 )
 
-from octodns.record import Record, Update, GeoCodes
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
+from octodns.record import GeoCodes, Record, Update
 
 __VERSION__ = '0.0.4'
 
@@ -245,7 +244,6 @@ class _AzureRecord(object):
         return {key_name: [azure_class(ptrdname=v) for v in values]}
 
     def _params_for_TXT(self, data, key_name, azure_class):
-
         params = []
         try:  # API for TxtRecord has list of str, even for singleton
             values = [v for v in azure_chunked_values(data['values'])]
