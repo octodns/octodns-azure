@@ -21,6 +21,8 @@ from azure.mgmt.dns.models import (
     TxtRecord,
     Zone,
 )
+from azure.mgmt.privatedns import PrivateDnsManagementClient
+from azure.mgmt.privatedns.models import PrivateZone
 from azure.mgmt.trafficmanager import TrafficManagerManagementClient
 from azure.mgmt.trafficmanager.models import (
     DnsConfig,
@@ -580,6 +582,7 @@ class AzureProvider(BaseProvider):
         client_status_retries=3,
         authority="https://login.microsoftonline.com",
         base_url="https://management.azure.com",
+        private_dns=False,
         *args,
         **kwargs,
     ):
@@ -617,6 +620,8 @@ class AzureProvider(BaseProvider):
         self.__azure_zones = None
         self._required_root_ns_values = {}
 
+        self.private_dns = private_dns
+
         self._dns_client_retry_policy = RetryPolicy(
             total_retries=client_total_retries,
             status_retries=client_status_retries,
@@ -643,12 +648,19 @@ class AzureProvider(BaseProvider):
     @property
     def _dns_client(self):
         if self.__dns_client is None:
-            self.__dns_client = DnsManagementClient(
-                credential=self._client_credential,
-                subscription_id=self._client_subscription_id,
-                retry_policy=self._dns_client_retry_policy,
-                base_url=self._base_url,
-            )
+            if not self.private_dns:
+                self.__dns_client = DnsManagementClient(
+                    credential=self._client_credential,
+                    subscription_id=self._client_subscription_id,
+                    retry_policy=self._dns_client_retry_policy,
+                    base_url=self._base_url,
+                )
+            else:
+                self.__dns_client = PrivateDnsManagementClient(
+                    credential=self._client_credential,
+                    subscription_id=self._client_subscription_id,
+                    base_url=self._base_url,
+                )
         return self.__dns_client
 
     @property
@@ -666,7 +678,12 @@ class AzureProvider(BaseProvider):
         if self.__azure_zones is None:
             self.log.debug('_azure_zones: loading')
             zones = set()
-            list_zones = self._dns_client.zones.list_by_resource_group
+            if not self.private_dns:
+                list_zones = self._dns_client.zones.list_by_resource_group
+            else:
+                list_zones = (
+                    self._dns_client.private_zones.list_by_resource_group
+                )
             for zone in list_zones(self._resource_group):
                 zones.add(zone.name.rstrip('.'))
             self.__azure_zones = zones
@@ -693,10 +710,18 @@ class AzureProvider(BaseProvider):
         # If not, and its time to create, lets do it.
         if create:
             self.log.debug('_check_zone:no matching zone; creating %s', name)
-            create_zone = self._dns_client.zones.create_or_update
-            zone = create_zone(
-                self._resource_group, name, Zone(location='global')
-            )
+            if not self.private_dns:
+                create_zone = self._dns_client.zones.create_or_update
+                zone = create_zone(
+                    self._resource_group, name, Zone(location='global')
+                )
+            else:
+                create_zone = (
+                    self._dns_client.private_zones._create_or_update_initial
+                )
+                zone = create_zone(
+                    self._resource_group, name, PrivateZone(location='global')
+                )
             self._azure_zones.add(name)
 
             # we create the zone so we should now be able to get its root ns
@@ -779,7 +804,10 @@ class AzureProvider(BaseProvider):
 
         zone_name = zone.name[:-1]
 
-        records = self._dns_client.record_sets.list_by_dns_zone
+        if not self.private_dns:
+            records = self._dns_client.record_sets.list_by_dns_zone
+        else:
+            records = self._dns_client.record_sets.list
         if self._check_zone(zone_name):
             exists = True
             for azrecord in records(self._resource_group, zone_name):
@@ -1613,13 +1641,22 @@ class AzureProvider(BaseProvider):
         )
         create = self._dns_client.record_sets.create_or_update
 
-        create(
-            resource_group_name=ar.resource_group,
-            zone_name=ar.zone_name,
-            relative_record_set_name=ar.relative_record_set_name,
-            record_type=ar.record_type,
-            parameters=ar.params,
-        )
+        if not self.private_dns:
+            create(
+                resource_group_name=ar.resource_group,
+                zone_name=ar.zone_name,
+                relative_record_set_name=ar.relative_record_set_name,
+                record_type=ar.record_type,
+                parameters=ar.params,
+            )
+        else:
+            create(
+                resource_group_name=ar.resource_group,
+                private_zone_name=ar.zone_name,
+                relative_record_set_name=ar.relative_record_set_name,
+                record_type=ar.record_type,
+                parameters=ar.params,
+            )
 
         if endpoints:
             # add nested endpoints for A/AAAA dynamic record limitation after
@@ -1674,13 +1711,22 @@ class AzureProvider(BaseProvider):
             )
             update = self._dns_client.record_sets.create_or_update
 
-            update(
-                resource_group_name=ar.resource_group,
-                zone_name=ar.zone_name,
-                relative_record_set_name=ar.relative_record_set_name,
-                record_type=ar.record_type,
-                parameters=ar.params,
-            )
+            if not self.private_dns:
+                update(
+                    resource_group_name=ar.resource_group,
+                    zone_name=ar.zone_name,
+                    relative_record_set_name=ar.relative_record_set_name,
+                    record_type=ar.record_type,
+                    parameters=ar.params,
+                )
+            else:
+                update(
+                    resource_group_name=ar.resource_group,
+                    private_zone_name=ar.zone_name,
+                    relative_record_set_name=ar.relative_record_set_name,
+                    record_type=ar.record_type,
+                    parameters=ar.params,
+                )
 
         if new_is_dynamic:
             # add any pending nested endpoints
@@ -1704,16 +1750,24 @@ class AzureProvider(BaseProvider):
 
         :type return: void
         '''
-        record = change.record
+        record = change.existing
         ar = _AzureRecord(self._resource_group, record, delete=True)
         delete = self._dns_client.record_sets.delete
 
-        delete(
-            self._resource_group,
-            ar.zone_name,
-            ar.relative_record_set_name,
-            ar.record_type,
-        )
+        if not self.private_dns:
+            delete(
+                self._resource_group,
+                ar.zone_name,
+                ar.relative_record_set_name,
+                ar.record_type,
+            )
+        else:
+            delete(
+                self._resource_group,
+                ar.zone_name,
+                ar.record_type,
+                ar.relative_record_set_name,
+            )
 
         if getattr(record, 'dynamic', False):
             self._traffic_managers_gc(record, set())
