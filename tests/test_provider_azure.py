@@ -36,6 +36,7 @@ from octodns.zone import Zone
 
 from octodns_azure import (
     AzureException,
+    AzurePrivateProvider,
     AzureProvider,
     _AzureRecord,
     _check_endswith_dot,
@@ -922,7 +923,7 @@ class TestAzureDnsProvider(TestCase):
         )
 
         # Fetch the client to force it to load the creds
-        provider._dns_client
+        provider.dns_client
 
         # set critical functions to return properly
         tm_list = provider._tm_client.profiles.list_by_resource_group
@@ -1268,10 +1269,10 @@ class TestAzureDnsProvider(TestCase):
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
         record_list.return_value = rs
 
-        zone_list = provider._dns_client.zones.list_by_resource_group
+        zone_list = provider.dns_client.zones.list_by_resource_group
         zone_list.return_value = [zone_public]
 
         exists = provider.populate(zone_public)
@@ -1282,7 +1283,7 @@ class TestAzureDnsProvider(TestCase):
     def test_azure_zones(self):
         provider = self._get_provider()
 
-        zone_list = provider._dns_client.zones.list_by_resource_group
+        zone_list = provider.dns_client.zones.list_by_resource_group
         zone_1 = AzureZone(location='global')
         # This is far from ideal but the
         # zone constructor doesn't let me set it on creation
@@ -1293,17 +1294,17 @@ class TestAzureDnsProvider(TestCase):
         zone_2.name = "zone-2"
         zone_list.return_value = [zone_1, zone_2, zone_1]
 
-        zones = provider._azure_zones
+        zones = provider.azure_zones
         self.assertTrue(zone_1.name in zones)
         self.assertTrue(zone_2.name in zones)
 
         # This should be returning two zones since two zones are the same
-        self.assertEqual(len(provider._azure_zones), 2)
+        self.assertEqual(len(provider.azure_zones), 2)
 
     def test_bad_zone_response(self):
         provider = self._get_provider()
 
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), 'Azure Error')
         self.assertEqual(provider._check_zone('unit.test', create=False), None)
 
@@ -1449,7 +1450,7 @@ class TestAzureDnsProvider(TestCase):
             str(ctx.exception).startswith('Collision in Traffic Manager')
         )
 
-    @patch('octodns_azure.AzureProvider._generate_traffic_managers')
+    @patch('octodns_azure.AzureBaseProvider._generate_traffic_managers')
     def test_extra_changes_non_last_fallback_contains_default(self, mock_gtm):
         provider = self._get_provider()
 
@@ -2623,7 +2624,7 @@ class TestAzureDnsProvider(TestCase):
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
         # sync is called once for each profile, plus 1 at the end for nested
         # endpoints to workaround A/AAAA nesting limitation in Azure
@@ -2686,7 +2687,7 @@ class TestAzureDnsProvider(TestCase):
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
         self.assertEqual(tm_sync.call_count, len(profiles))
         create.assert_called_once()
@@ -2846,7 +2847,7 @@ class TestAzureDnsProvider(TestCase):
         # the dynamic record
         self.assertEqual(tm_sync.call_count, len(profiles))
 
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         create.assert_called_once()
 
     def test_apply_create_root_ns_management(self):
@@ -2872,7 +2873,7 @@ class TestAzureDnsProvider(TestCase):
 
         provider._apply_Create(Create(record))
 
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         create.assert_called_once_with(
             resource_group_name='mock_rg',
             zone_name='unit.tests',
@@ -2905,7 +2906,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
@@ -2919,7 +2920,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -2935,7 +2936,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
@@ -2961,7 +2962,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -2983,7 +2984,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -3025,7 +3026,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, plus 1 at the end for nested
@@ -3052,7 +3053,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, extra call at the end is not
@@ -3096,7 +3097,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, num_tms)
@@ -3110,7 +3111,7 @@ class TestAzureDnsProvider(TestCase):
         change = Delete(record)
         provider._apply_Delete(change)
         dns_delete, tm_delete = (
-            provider._dns_client.record_sets.delete,
+            provider.dns_client.record_sets.delete,
             provider._tm_client.profiles.delete,
         )
         dns_delete.assert_called_once()
@@ -3126,7 +3127,7 @@ class TestAzureDnsProvider(TestCase):
 
         err_msg = 'The Resource \'Microsoft.Network/dnszones/unit2.test\' '
         err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         expected_n = len(octo_records)
@@ -3150,12 +3151,12 @@ class TestAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
         record_list.return_value = rs
 
         err_msg = 'The Resource \'Microsoft.Network/dnszones/unit3.test\' '
         err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         exists = provider.populate(Zone('unit3.test.', []))
@@ -3167,7 +3168,7 @@ class TestAzureDnsProvider(TestCase):
         provider = self._get_provider()
 
         # zone already exists
-        provider._azure_zones.add('unit.test')
+        provider.azure_zones.add('unit.test')
 
         rs = []
 
@@ -3185,7 +3186,7 @@ class TestAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'sub', 12, 'NS'
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
         record_list.return_value = rs
 
         # zone will exist and have a mixture of NS records
@@ -3211,7 +3212,7 @@ class TestAzureDnsProvider(TestCase):
             'ns1-1.azure-dns.com.',
             'ns1-1.azure-dns.info.',
         ]
-        provider._dns_client.zones.create_or_update.return_value = test_zone
+        provider.dns_client.zones.create_or_update.return_value = test_zone
 
         # with create we'll fail to find it, create it, and grab it's root NS
         # record values
@@ -3320,7 +3321,7 @@ class TestPrivateAzureDnsProvider(TestCase):
 
         :type return: AzureProvider
         '''
-        provider = AzureProvider(
+        provider = AzurePrivateProvider(
             'mock_id',
             'mock_client',
             'mock_key',
@@ -3328,11 +3329,10 @@ class TestPrivateAzureDnsProvider(TestCase):
             'mock_sub',
             'mock_rg',
             strict_supports=False,
-            private_dns=True,
         )
 
         # Fetch the client to force it to load the creds
-        provider._dns_client
+        provider.dns_client
 
         # set critical functions to return properly
         tm_list = provider._tm_client.profiles.list_by_resource_group
@@ -3678,10 +3678,10 @@ class TestPrivateAzureDnsProvider(TestCase):
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list
+        record_list = provider.dns_client.record_sets.list
         record_list.return_value = rs
 
-        zone_list = provider._dns_client.private_zones.list_by_resource_group
+        zone_list = provider.dns_client.private_zones.list_by_resource_group
         zone_list.return_value = [zone_private]
 
         exists = provider.populate(zone_private)
@@ -3692,7 +3692,7 @@ class TestPrivateAzureDnsProvider(TestCase):
     def test_azure_zones(self):
         provider = self._get_provider()
 
-        zone_list = provider._dns_client.private_zones.list_by_resource_group
+        zone_list = provider.dns_client.private_zones.list_by_resource_group
         zone_1 = AzurePrivateZone(location='global')
         # This is far from ideal but the
         # zone constructor doesn't let me set it on creation
@@ -3703,17 +3703,17 @@ class TestPrivateAzureDnsProvider(TestCase):
         zone_2.name = "zone-2"
         zone_list.return_value = [zone_1, zone_2, zone_1]
 
-        zones = provider._azure_zones
+        zones = provider.azure_zones
         self.assertTrue(zone_1.name in zones)
         self.assertTrue(zone_2.name in zones)
 
         # This should be returning two zones since two zones are the same
-        self.assertEqual(len(provider._azure_zones), 2)
+        self.assertEqual(len(provider.azure_zones), 2)
 
     def test_bad_zone_response(self):
         provider = self._get_provider()
 
-        _get = provider._dns_client.private_zones.get
+        _get = provider.dns_client.private_zones.get
         _get.side_effect = CloudError(Mock(status=404), 'Azure Error')
         self.assertEqual(provider._check_zone('unit.test', create=False), None)
 
@@ -3859,7 +3859,7 @@ class TestPrivateAzureDnsProvider(TestCase):
             str(ctx.exception).startswith('Collision in Traffic Manager')
         )
 
-    @patch('octodns_azure.AzureProvider._generate_traffic_managers')
+    @patch('octodns_azure.AzureBaseProvider._generate_traffic_managers')
     def test_extra_changes_non_last_fallback_contains_default(self, mock_gtm):
         provider = self._get_provider()
 
@@ -5033,7 +5033,7 @@ class TestPrivateAzureDnsProvider(TestCase):
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
         # sync is called once for each profile, plus 1 at the end for nested
         # endpoints to workaround A/AAAA nesting limitation in Azure
@@ -5098,7 +5098,7 @@ class TestPrivateAzureDnsProvider(TestCase):
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
         self.assertEqual(tm_sync.call_count, len(profiles))
         create.assert_called_once()
@@ -5260,7 +5260,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         # the dynamic record
         self.assertEqual(tm_sync.call_count, len(profiles))
 
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         create.assert_called_once()
 
     def test_apply_update_dynamic(self):
@@ -5279,7 +5279,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
@@ -5293,7 +5293,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -5309,7 +5309,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
@@ -5335,7 +5335,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -5359,7 +5359,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -5401,7 +5401,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, plus 1 at the end for nested
@@ -5428,7 +5428,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, extra call at the end is not
@@ -5472,7 +5472,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, num_tms)
@@ -5486,7 +5486,7 @@ class TestPrivateAzureDnsProvider(TestCase):
         change = Delete(record)
         provider._apply_Delete(change)
         dns_delete, tm_delete = (
-            provider._dns_client.record_sets.delete,
+            provider.dns_client.record_sets.delete,
             provider._tm_client.profiles.delete,
         )
         dns_delete.assert_called_once()
@@ -5502,7 +5502,7 @@ class TestPrivateAzureDnsProvider(TestCase):
 
         err_msg = 'The Resource \'Microsoft.Network/dnszones/unit2.test\' '
         err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         expected_n = len(octo_records)
@@ -5526,12 +5526,12 @@ class TestPrivateAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
         record_list.return_value = rs
 
         err_msg = 'The Resource \'Microsoft.Network/dnszones/unit3.test\' '
         err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         exists = provider.populate(Zone('unit3.test.', []))
