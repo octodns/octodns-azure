@@ -1683,7 +1683,7 @@ class AzureProvider(AzureBaseProvider):
     Azure DNS Provider
 
     azuredns.py:
-        class: octodns.provider.azuredns.AzureProvider
+        class: octodns_azure.AzureProvider
         # Current support of authentication of access to Azure services only
         # includes using a Service Principal:
         # https://docs.microsoft.com/en-us/azure/azure-resource-manager/
@@ -1708,7 +1708,7 @@ class AzureProvider(AzureBaseProvider):
                 class: octodns.provider.yaml.YamlProvider
                 directory: ./config (example path to directory of zone files)
               azuredns:
-                class: octodns.provider.azuredns.AzureProvider
+                class: octodns_azure.AzureProvider
                 client_id: env/AZURE_APPLICATION_ID
                 key: env/AZURE_AUTHENTICATION_KEY
                 directory_id: env/AZURE_DIRECTORY_ID
@@ -1808,7 +1808,7 @@ class AzurePrivateProvider(AzureBaseProvider):
     Azure DNS Provider
 
     azuredns.py:
-        class: octodns.provider.azuredns.AzureProvider
+        class: octodns_azure.AzurePrivateProvider
         # Current support of authentication of access to Azure services only
         # includes using a Service Principal:
         # https://docs.microsoft.com/en-us/azure/azure-resource-manager/
@@ -1833,7 +1833,7 @@ class AzurePrivateProvider(AzureBaseProvider):
                 class: octodns.provider.yaml.YamlProvider
                 directory: ./config (example path to directory of zone files)
               azuredns:
-                class: octodns.provider.azuredns.AzureProvider
+                class: octodns_azure.AzurePrivateProvider
                 client_id: env/AZURE_APPLICATION_ID
                 key: env/AZURE_AUTHENTICATION_KEY
                 directory_id: env/AZURE_DIRECTORY_ID
