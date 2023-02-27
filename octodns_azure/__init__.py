@@ -558,7 +558,6 @@ class AzureBaseProvider(BaseProvider):
         self.__client_credential = None
 
         self._dns_client = None
-        self.__tm_client = None
 
         self._resource_group = resource_group
         self._traffic_managers = dict()
@@ -588,16 +587,6 @@ class AzureBaseProvider(BaseProvider):
                 logger=logger,
             )
         return self.__client_credential
-
-    @property
-    def _tm_client(self):
-        if self.__tm_client is None:
-            self.__tm_client = TrafficManagerManagementClient(
-                credential=self._client_credential,
-                subscription_id=self._client_subscription_id,
-                base_url=self._base_url,
-            )
-        return self.__tm_client
 
     def _check_zone(self, name, create=False):
         '''Checks whether a zone specified in a source exist in Azure server.
@@ -630,48 +619,6 @@ class AzureBaseProvider(BaseProvider):
         else:
             # Else return nothing (aka false)
             return
-
-    def _populate_traffic_managers(self):
-        self.log.debug('traffic managers: loading')
-        list_profiles = self._tm_client.profiles.list_by_resource_group
-        for profile in list_profiles(self._resource_group):
-            self._traffic_managers[profile.id] = profile
-        # link nested profiles in advance for convenience
-        for _, profile in self._traffic_managers.items():
-            self._populate_nested_profiles(profile)
-
-    def _populate_nested_profiles(self, profile):
-        for ep in profile.endpoints:
-            target_id = ep.target_resource_id
-            if target_id and target_id in self._traffic_managers:
-                target = self._traffic_managers[target_id]
-                ep.target_resource = self._populate_nested_profiles(target)
-        return profile
-
-    def _get_tm_profile_by_id(self, resource_id):
-        if not self._traffic_managers:
-            self._populate_traffic_managers()
-        return self._traffic_managers.get(resource_id)
-
-    def _profile_name_to_id(self, name):
-        return (
-            '/subscriptions/'
-            + self._client_subscription_id
-            + '/resourceGroups/'
-            + self._resource_group
-            + '/providers/Microsoft.Network/trafficManagerProfiles/'
-            + name
-        )
-
-    def _get_tm_profile_by_name(self, name):
-        profile_id = self._profile_name_to_id(name)
-        return self._get_tm_profile_by_id(profile_id)
-
-    def _get_tm_for_dynamic_record(self, record):
-        if not self.SUPPORTS_DYNAMIC:
-            return None
-        name = _root_traffic_manager_name(record)
-        return self._get_tm_profile_by_name(name)
 
     def populate(self, zone, target=False, lenient=False):
         '''Required function of manager.py to collect records from zone.
@@ -1442,59 +1389,6 @@ class AzureBaseProvider(BaseProvider):
 
         return traffic_managers
 
-    def _sync_traffic_managers(self, desired_profiles):
-        seen = set()
-
-        tm_sync = self._tm_client.profiles.create_or_update
-        populate = self._populate_nested_profiles
-
-        for desired in desired_profiles:
-            name = desired.name
-            if name in seen:
-                continue
-
-            existing = self._get_tm_profile_by_name(name)
-            if not _profile_is_match(existing, desired):
-                self.log.info(
-                    '_sync_traffic_managers: Syncing profile=%s', name
-                )
-                profile = tm_sync(self._resource_group, name, desired)
-                self._traffic_managers[profile.id] = populate(profile)
-            else:
-                self.log.debug(
-                    '_sync_traffic_managers: Skipping profile=%s: up to date',
-                    name,
-                )
-            seen.add(name)
-
-        return seen
-
-    def _find_traffic_managers(self, record):
-        tm_prefix = _root_traffic_manager_name(record)
-
-        profiles = set()
-        for profile_id in self._traffic_managers:
-            # match existing profiles with record's prefix
-            name = profile_id.split('/')[-1]
-            if (
-                name == tm_prefix
-                or name.startswith(f'{tm_prefix}-pool-')
-                or name.startswith(f'{tm_prefix}-rule-')
-            ):
-                profiles.add(name)
-
-        return profiles
-
-    def _traffic_managers_gc(self, record, active_profiles):
-        existing_profiles = self._find_traffic_managers(record)
-
-        # delete unused profiles
-        for profile_name in existing_profiles - active_profiles:
-            self.log.info(
-                '_traffic_managers_gc: Deleting profile=%s', profile_name
-            )
-            self._tm_client.profiles.delete(self._resource_group, profile_name)
-
     def _apply_Create(self, change):
         '''A record from change must be created.
 
@@ -1733,6 +1627,10 @@ class AzureProvider(AzureBaseProvider):
     SUPPORTS_ROOT_NS = True
     SUPPORTS_DYNAMIC = True
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__tm_client = None
+
     @property
     def dns_client(self):
         if self._dns_client is None:
@@ -1804,6 +1702,109 @@ class AzureProvider(AzureBaseProvider):
     ):
         delete = self.dns_client.record_sets.delete
         delete(resource_group, zone_name, relative_record_set_name, record_type)
+
+    @property
+    def _tm_client(self):
+        if self.__tm_client is None:
+            self.__tm_client = TrafficManagerManagementClient(
+                credential=self._client_credential,
+                subscription_id=self._client_subscription_id,
+                base_url=self._base_url,
+            )
+        return self.__tm_client
+
+    def _populate_traffic_managers(self):
+        self.log.debug('traffic managers: loading')
+        list_profiles = self._tm_client.profiles.list_by_resource_group
+        for profile in list_profiles(self._resource_group):
+            self._traffic_managers[profile.id] = profile
+        # link nested profiles in advance for convenience
+        for _, profile in self._traffic_managers.items():
+            self._populate_nested_profiles(profile)
+
+    def _populate_nested_profiles(self, profile):
+        for ep in profile.endpoints:
+            target_id = ep.target_resource_id
+            if target_id and target_id in self._traffic_managers:
+                target = self._traffic_managers[target_id]
+                ep.target_resource = self._populate_nested_profiles(target)
+        return profile
+
+    def _get_tm_profile_by_id(self, resource_id):
+        if not self._traffic_managers:
+            self._populate_traffic_managers()
+        return self._traffic_managers.get(resource_id)
+
+    def _profile_name_to_id(self, name):
+        return (
+            '/subscriptions/'
+            + self._client_subscription_id
+            + '/resourceGroups/'
+            + self._resource_group
+            + '/providers/Microsoft.Network/trafficManagerProfiles/'
+            + name
+        )
+
+    def _get_tm_profile_by_name(self, name):
+        profile_id = self._profile_name_to_id(name)
+        return self._get_tm_profile_by_id(profile_id)
+
+    def _get_tm_for_dynamic_record(self, record):
+        name = _root_traffic_manager_name(record)
+        return self._get_tm_profile_by_name(name)
+
+    def _sync_traffic_managers(self, desired_profiles):
+        seen = set()
+
+        tm_sync = self._tm_client.profiles.create_or_update
+        populate = self._populate_nested_profiles
+
+        for desired in desired_profiles:
+            name = desired.name
+            if name in seen:
+                continue
+
+            existing = self._get_tm_profile_by_name(name)
+            if not _profile_is_match(existing, desired):
+                self.log.info(
+                    '_sync_traffic_managers: Syncing profile=%s', name
+                )
+                profile = tm_sync(self._resource_group, name, desired)
+                self._traffic_managers[profile.id] = populate(profile)
+            else:
+                self.log.debug(
+                    '_sync_traffic_managers: Skipping profile=%s: up to date',
+                    name,
+                )
+            seen.add(name)
+
+        return seen
+
+    def _find_traffic_managers(self, record):
+        tm_prefix = _root_traffic_manager_name(record)
+
+        profiles = set()
+        for profile_id in self._traffic_managers:
+            # match existing profiles with record's prefix
+            name = profile_id.split('/')[-1]
+            if (
+                name == tm_prefix
+                or name.startswith(f'{tm_prefix}-pool-')
+                or name.startswith(f'{tm_prefix}-rule-')
+            ):
+                profiles.add(name)
+
+        return profiles
+
+    def _traffic_managers_gc(self, record, active_profiles):
+        existing_profiles = self._find_traffic_managers(record)
+
+        # delete unused profiles
+        for profile_name in existing_profiles - active_profiles:
+            self.log.info(
+                '_traffic_managers_gc: Deleting profile=%s', profile_name
+            )
+            self._tm_client.profiles.delete(self._resource_group, profile_name)
 
 
 class AzurePrivateProvider(AzureBaseProvider):
@@ -1941,3 +1942,6 @@ class AzurePrivateProvider(AzureBaseProvider):
             record_type,
             relative_record_set_name,
         )
+
+    def _get_tm_for_dynamic_record(self, record):
+        return None
