@@ -532,7 +532,7 @@ class AzureBaseProvider(BaseProvider):
         *args,
         **kwargs,
     ):
-        self.log = getLogger(f'AzureProvider[{id}]')
+        self.log = getLogger(f'{self.__class__.__name__}[{id}]')
         self.log.debug(
             '__init__: id=%s, client_id=%s, '
             'key=***, directory_id:%s, authority:%s, '
