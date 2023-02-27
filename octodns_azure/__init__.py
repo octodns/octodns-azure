@@ -511,10 +511,8 @@ def _profile_is_match(have, desired):
 
 class AzureBaseProvider(BaseProvider):
     SUPPORTS_GEO = False
-    SUPPORTS_DYNAMIC = True
     SUPPORTS_POOL_VALUE_STATUS = True
     SUPPORTS_MULTIVALUE_PTR = True
-    SUPPORTS_ROOT_NS = True
     SUPPORTS = set(
         ('A', 'AAAA', 'CAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV', 'TXT')
     )
@@ -670,6 +668,8 @@ class AzureBaseProvider(BaseProvider):
         return self._get_tm_profile_by_id(profile_id)
 
     def _get_tm_for_dynamic_record(self, record):
+        if not self.SUPPORTS_DYNAMIC:
+            return None
         name = _root_traffic_manager_name(record)
         return self._get_tm_profile_by_name(name)
 
@@ -1730,6 +1730,9 @@ class AzureProvider(AzureBaseProvider):
         of how dynamic records are designed and caveats of using them.
     '''
 
+    SUPPORTS_ROOT_NS = True
+    SUPPORTS_DYNAMIC = True
+
     @property
     def dns_client(self):
         if self._dns_client is None:
@@ -1854,6 +1857,13 @@ class AzurePrivateProvider(AzureBaseProvider):
         Please read https://github.com/octodns/octodns/pull/706 for an overview
         of how dynamic records are designed and caveats of using them.
     '''
+
+    # private dns doesn't support name_servers
+    # https://learn.microsoft.com/en-us/python/api/azure-mgmt-privatedns/azure.mgmt.privatedns.models.privatezone?view=azure-python
+    SUPPORTS_ROOT_NS = False
+    # If enabled this would create public traffic managers which doesn't make
+    # sense.
+    SUPPORTS_DYNAMIC = False
 
     @property
     def dns_client(self):
