@@ -11,7 +11,7 @@ azure-mgmt-trafficmanager==1.0.0
 certifi==2022.12.7
 cffi==1.15.1
 charset-normalizer==3.0.1
-cryptography==39.0.0
+cryptography==39.0.1
 dnspython==2.3.0
 fqdn==1.5.1
 idna==3.4
