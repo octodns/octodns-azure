@@ -1294,12 +1294,12 @@ class TestAzureDnsProvider(TestCase):
         zone_2.name = "zone-2"
         zone_list.return_value = [zone_1, zone_2, zone_1]
 
-        zones = provider.azure_zones
+        zones = provider._azure_zones
         self.assertTrue(zone_1.name in zones)
         self.assertTrue(zone_2.name in zones)
 
         # This should be returning two zones since two zones are the same
-        self.assertEqual(len(provider.azure_zones), 2)
+        self.assertEqual(len(provider._azure_zones), 2)
 
     def test_bad_zone_response(self):
         provider = self._get_provider()
@@ -1450,7 +1450,7 @@ class TestAzureDnsProvider(TestCase):
             str(ctx.exception).startswith('Collision in Traffic Manager')
         )
 
-    @patch('octodns_azure.AzureBaseProvider._generate_traffic_managers')
+    @patch('octodns_azure.AzureProvider._generate_traffic_managers')
     def test_extra_changes_non_last_fallback_contains_default(self, mock_gtm):
         provider = self._get_provider()
 
@@ -3168,7 +3168,7 @@ class TestAzureDnsProvider(TestCase):
         provider = self._get_provider()
 
         # zone already exists
-        provider.azure_zones.add('unit.test')
+        provider._azure_zones.add('unit.test')
 
         rs = []
 
@@ -3542,12 +3542,12 @@ class TestPrivateAzureDnsProvider(TestCase):
         zone_2.name = "zone-2"
         zone_list.return_value = [zone_1, zone_2, zone_1]
 
-        zones = provider.azure_zones
+        zones = provider._azure_zones
         self.assertTrue(zone_1.name in zones)
         self.assertTrue(zone_2.name in zones)
 
         # This should be returning two zones since two zones are the same
-        self.assertEqual(len(provider.azure_zones), 2)
+        self.assertEqual(len(provider._azure_zones), 2)
 
     def test_bad_zone_response(self):
         provider = self._get_provider()
