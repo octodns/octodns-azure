@@ -34,6 +34,7 @@ from azure.mgmt.trafficmanager.models import (
     MonitorConfigCustomHeadersItem,
     Profile,
 )
+
 from octodns.provider import ProviderException
 from octodns.provider.base import BaseProvider
 from octodns.record import GeoCodes, Record, Update
@@ -248,7 +249,6 @@ class _AzureRecord(object):
         return {key_name: [azure_class(ptrdname=v) for v in values]}
 
     def _params_for_TXT(self, data, key_name, azure_class):
-
         params = []
         try:  # API for TxtRecord has list of str, even for singleton
             values = [v for v in azure_chunked_values(data['values'])]
