@@ -55,6 +55,7 @@ setup(
     install_requires=(
         'azure-identity>=1.7.1,<1.8.0',
         'azure-mgmt-dns>=8.0.0,<8.1.0',
+        'azure-mgmt-privatedns>=1.0.0,<1.1.0',
         'azure-mgmt-trafficmanager>=1.0.0,<1.1.0',
         'msrestazure>=0.6.4,<0.7.0',
         'octodns>=0.9.16',
