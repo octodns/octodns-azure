@@ -1,3 +1,7 @@
+## v0.0.5 - 202?-??-?? - ???
+
+* Add support for [Azure Private DNS](https://learn.microsoft.com/en-us/azure/dns/private-dns-overview)
+
 ## v0.0.4 - 2022-11-30 - Support the root
 
 * Enable `SUPPORTS_ROOT_NS` for management of root NS records. Requires
