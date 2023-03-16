@@ -61,6 +61,8 @@ providers:
 
 The first four variables above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.
 
+For management of DNS zones on [Azure Private DNS](https://learn.microsoft.com/en-us/azure/dns/private-dns-overview), use `class: octodns_azure.AzurePrivateProvider`. Note that this provider does not support dynamic records or root NS records.
+
 ### Support Information
 
 #### Records
