@@ -94,9 +94,9 @@ AzureProvider supports the following healthcheck options for dynamic records (fr
   octodns:
     azuredns:
       healthcheck:
-        interval_in_seconds: 10
-        timeout_in_seconds: 7
-        tolerated_number_of_failures: 4
+        interval: 10
+        timeout: 7
+        num_failures: 4
 ```
 
 ### Development
