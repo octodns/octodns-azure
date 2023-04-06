@@ -1591,7 +1591,7 @@ class TestAzureDnsProvider(TestCase):
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone_public, azrecord)
+        record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertEqual(record2.dynamic._data(), record.dynamic._data())
 
         # test that extra changes doesn't show any changes
@@ -1711,6 +1711,7 @@ class TestAzureDnsProvider(TestCase):
                     'rules': [{'geos': ['AF'], 'pool': 'def'}],
                 },
             },
+            lenient=True,
         )
 
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
@@ -1758,6 +1759,7 @@ class TestAzureDnsProvider(TestCase):
                     'rules': [{'geos': ['AF'], 'pool': 'rr'}],
                 },
             },
+            lenient=True,
         )
 
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
@@ -2254,6 +2256,7 @@ class TestAzureDnsProvider(TestCase):
             zone_public,
             'foo',
             data={
+                'octodns': {'lenient': True},
                 'type': 'CNAME',
                 'ttl': 60,
                 'value': 'default.unit.tests.',
@@ -2323,7 +2326,7 @@ class TestAzureDnsProvider(TestCase):
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone_public, azrecord)
+        record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertEqual(record2.dynamic._data(), record.dynamic._data())
 
         # test that extra changes doesn't show any changes
