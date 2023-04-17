@@ -1714,7 +1714,7 @@ class AzureProvider(AzureBaseProvider):
             )
             self._tm_client.profiles.delete(self._resource_group, profile_name)
 
-    def _create_or_update_record_sets(self, ar: _AzureRecord):
+    def _create_or_update_record_sets(self, ar):
         """Send record set create_or_update (creating/attaching records/TMs to the DNS zone).
 
         Includes an adjustment for traffic mananager API version 1.1.0b1
