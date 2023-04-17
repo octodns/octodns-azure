@@ -17,7 +17,6 @@ from azure.mgmt.dns.models import (
     MxRecord,
     NsRecord,
     PtrRecord,
-    RecordSet,
     SrvRecord,
     SubResource,
     TxtRecord,
@@ -26,7 +25,6 @@ from azure.mgmt.dns.models import (
 from azure.mgmt.privatedns import PrivateDnsManagementClient
 from azure.mgmt.privatedns.models import PrivateZone
 from azure.mgmt.trafficmanager import TrafficManagerManagementClient
-from azure.mgmt.trafficmanager import __version__ as trafficmanager_version
 from azure.mgmt.trafficmanager.models import (
     AlwaysServe,
     DnsConfig,
@@ -133,7 +131,12 @@ class _AzureRecord(object):
         self.relative_record_set_name = record.name or '@'
         self.record_type = record._type
         self._record = record
-        self.traffic_manager = traffic_manager
+        # new version of traffic manager throws the following unless you use the
+        # SubResource object for the target_resource
+        # AttributeError: 'Profile' object has no attribute 'validate'
+        self.traffic_manager = (
+            SubResource(id=traffic_manager.id) if traffic_manager else None
+        )
 
         if delete:
             return
@@ -1651,7 +1654,14 @@ class AzureProvider(AzureBaseProvider):
         ar = _AzureRecord(
             self._resource_group, record, traffic_manager=root_profile
         )
-        self._create_or_update_record_sets(ar)
+        create = self.dns_client.record_sets.create_or_update
+        create(
+            resource_group_name=ar.resource_group,
+            zone_name=ar.zone_name,
+            relative_record_set_name=ar.relative_record_set_name,
+            record_type=ar.record_type,
+            parameters=ar.params,
+        )
 
         if endpoints:
             # add nested endpoints for A/AAAA dynamic record limitation after
@@ -1714,34 +1724,6 @@ class AzureProvider(AzureBaseProvider):
             )
             self._tm_client.profiles.delete(self._resource_group, profile_name)
 
-    def _create_or_update_record_sets(self, ar):
-        """Send record set create_or_update (creating/attaching records/TMs to the DNS zone).
-
-        Includes an adjustment for traffic mananager API version 1.1.0b1
-        """
-        create = self.dns_client.record_sets.create_or_update
-
-        # new version of traffic manager throws the following unless you use the id
-        # for the target_resource
-        # AttributeError: 'Profile' object has no attribute 'validate'
-        if trafficmanager_version == '1.1.0b1' and isinstance(
-            ar.params.get("target_resource", None), Profile
-        ):
-            params = RecordSet(
-                target_resource=SubResource(id=ar.params["target_resource"].id),
-                ttl=ar.params["ttl"],
-            )
-        else:
-            params = ar.params
-
-        create(
-            resource_group_name=ar.resource_group,
-            zone_name=ar.zone_name,
-            relative_record_set_name=ar.relative_record_set_name,
-            record_type=ar.record_type,
-            parameters=params,
-        )
-
     def _apply_Update(self, change):
         '''A record from change must be created.
 
@@ -1785,7 +1767,14 @@ class AzureProvider(AzureBaseProvider):
             ar = _AzureRecord(
                 self._resource_group, new, traffic_manager=profile
             )
-            self._create_or_update_record_sets(ar)
+            update = self.dns_client.record_sets.create_or_update
+            update(
+                resource_group_name=ar.resource_group,
+                zone_name=ar.zone_name,
+                relative_record_set_name=ar.relative_record_set_name,
+                record_type=ar.record_type,
+                parameters=ar.params,
+            )
 
         if new_is_dynamic:
             # add any pending nested endpoints
