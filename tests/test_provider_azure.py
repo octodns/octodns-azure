@@ -20,6 +20,7 @@ from azure.mgmt.dns.models import (
     TxtRecord,
 )
 from azure.mgmt.dns.models import Zone as AzureZone
+from azure.mgmt.privatedns.models import PrivateZone as AzurePrivateZone
 from azure.mgmt.trafficmanager.models import (
     AlwaysServe,
     DnsConfig,
@@ -37,6 +38,7 @@ from octodns.zone import Zone
 
 from octodns_azure import (
     AzureException,
+    AzurePrivateProvider,
     AzureProvider,
     _AzureRecord,
     _check_endswith_dot,
@@ -46,27 +48,35 @@ from octodns_azure import (
     _root_traffic_manager_name,
 )
 
-zone = Zone(name='unit.tests.', sub_zones=[])
+zone_public = Zone(name='unit.tests.', sub_zones=[])
 octo_records = []
 octo_records.append(
     Record.new(
-        zone, '', {'ttl': 0, 'type': 'A', 'values': ['1.2.3.4', '10.10.10.10']}
+        zone_public,
+        '',
+        {'ttl': 0, 'type': 'A', 'values': ['1.2.3.4', '10.10.10.10']},
     )
 )
 octo_records.append(
     Record.new(
-        zone, 'a', {'ttl': 1, 'type': 'A', 'values': ['1.2.3.4', '1.1.1.1']}
+        zone_public,
+        'a',
+        {'ttl': 1, 'type': 'A', 'values': ['1.2.3.4', '1.1.1.1']},
     )
 )
 octo_records.append(
-    Record.new(zone, 'aa', {'ttl': 9001, 'type': 'A', 'values': ['1.2.4.3']})
-)
-octo_records.append(
-    Record.new(zone, 'aaa', {'ttl': 2, 'type': 'A', 'values': ['1.1.1.3']})
+    Record.new(
+        zone_public, 'aa', {'ttl': 9001, 'type': 'A', 'values': ['1.2.4.3']}
+    )
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public, 'aaa', {'ttl': 2, 'type': 'A', 'values': ['1.1.1.3']}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_public,
         'aaaa1',
         {
             'ttl': 300,
@@ -80,7 +90,7 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         'aaaa2',
         {
             'ttl': 300,
@@ -91,7 +101,7 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         'caa1',
         {
             'ttl': 9,
@@ -102,7 +112,7 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         'caa2',
         {
             'ttl': 9,
@@ -116,12 +126,14 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone, 'cname', {'ttl': 3, 'type': 'CNAME', 'value': 'a.unit.tests.'}
+        zone_public,
+        'cname',
+        {'ttl': 3, 'type': 'CNAME', 'value': 'a.unit.tests.'},
     )
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         'mx1',
         {
             'ttl': 3,
@@ -135,7 +147,7 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         'mx2',
         {
             'ttl': 3,
@@ -146,7 +158,7 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         '',
         {
             'ttl': 4,
@@ -157,17 +169,19 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone, 'foo', {'ttl': 5, 'type': 'NS', 'value': 'ns1.unit.tests.'}
+        zone_public, 'foo', {'ttl': 5, 'type': 'NS', 'value': 'ns1.unit.tests.'}
     )
 )
 octo_records.append(
     Record.new(
-        zone, 'ptr1', {'ttl': 5, 'type': 'PTR', 'value': 'ptr1.unit.tests.'}
+        zone_public,
+        'ptr1',
+        {'ttl': 5, 'type': 'PTR', 'value': 'ptr1.unit.tests.'},
     )
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         '_srv._tcp',
         {
             'ttl': 6,
@@ -191,7 +205,7 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         '_srv2._tcp',
         {
             'ttl': 7,
@@ -209,12 +223,14 @@ octo_records.append(
 )
 octo_records.append(
     Record.new(
-        zone, 'txt1', {'ttl': 8, 'type': 'TXT', 'value': 'txt singleton test'}
+        zone_public,
+        'txt1',
+        {'ttl': 8, 'type': 'TXT', 'value': 'txt singleton test'},
     )
 )
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         'txt2',
         {
             'ttl': 9,
@@ -233,7 +249,7 @@ long_txt += " ip4:10.10.16.0/24 ip4:10.10.17.0/24 ip4:10.10.18.0/24"
 long_txt += " ip4:10.10.19.0/24 ip4:10.10.20.0/24  ~all"
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
         'txt3',
         {'ttl': 10, 'type': 'TXT', 'values': ['txt multiple test', long_txt]},
     )
@@ -241,7 +257,228 @@ octo_records.append(
 
 octo_records.append(
     Record.new(
-        zone,
+        zone_public,
+        'ptr2',
+        {
+            'ttl': 11,
+            'type': 'PTR',
+            'values': ['ptr21.unit.tests.', 'ptr22.unit.tests.'],
+        },
+    )
+)
+
+zone_private = Zone(name='unit.tests.', sub_zones=[])
+octo_records = []
+octo_records.append(
+    Record.new(
+        zone_private,
+        '',
+        {'ttl': 0, 'type': 'A', 'values': ['1.2.3.4', '10.10.10.10']},
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'a',
+        {'ttl': 1, 'type': 'A', 'values': ['1.2.3.4', '1.1.1.1']},
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private, 'aa', {'ttl': 9001, 'type': 'A', 'values': ['1.2.4.3']}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private, 'aaa', {'ttl': 2, 'type': 'A', 'values': ['1.1.1.3']}
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'aaaa1',
+        {
+            'ttl': 300,
+            'type': 'AAAA',
+            'values': [
+                '2601:644:500:e210:62f8:1dff:feb8:947a',
+                '2601:642:500:e210:62f8:1dff:feb8:947a',
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'aaaa2',
+        {
+            'ttl': 300,
+            'type': 'AAAA',
+            'value': '2601:644:500:e210:62f8:1dff:feb8:947a',
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'caa1',
+        {
+            'ttl': 9,
+            'type': 'CAA',
+            'value': {'flags': 0, 'tag': 'issue', 'value': 'ca.unit.tests'},
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'caa2',
+        {
+            'ttl': 9,
+            'type': 'CAA',
+            'values': [
+                {'flags': 0, 'tag': 'issue', 'value': 'ca1.unit.tests'},
+                {'flags': 0, 'tag': 'issue', 'value': 'ca2.unit.tests'},
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'cname',
+        {'ttl': 3, 'type': 'CNAME', 'value': 'a.unit.tests.'},
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'mx1',
+        {
+            'ttl': 3,
+            'type': 'MX',
+            'values': [
+                {'priority': 10, 'value': 'mx1.unit.tests.'},
+                {'priority': 20, 'value': 'mx2.unit.tests.'},
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'mx2',
+        {
+            'ttl': 3,
+            'type': 'MX',
+            'values': [{'priority': 10, 'value': 'mx1.unit.tests.'}],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        '',
+        {
+            'ttl': 4,
+            'type': 'NS',
+            'values': ['ns1.unit.tests.', 'ns2.unit.tests.'],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'foo',
+        {'ttl': 5, 'type': 'NS', 'value': 'ns1.unit.tests.'},
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'ptr1',
+        {'ttl': 5, 'type': 'PTR', 'value': 'ptr1.unit.tests.'},
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        '_srv._tcp',
+        {
+            'ttl': 6,
+            'type': 'SRV',
+            'values': [
+                {
+                    'priority': 10,
+                    'weight': 20,
+                    'port': 30,
+                    'target': 'foo-1.unit.tests.',
+                },
+                {
+                    'priority': 12,
+                    'weight': 30,
+                    'port': 30,
+                    'target': 'foo-2.unit.tests.',
+                },
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        '_srv2._tcp',
+        {
+            'ttl': 7,
+            'type': 'SRV',
+            'values': [
+                {
+                    'priority': 12,
+                    'weight': 17,
+                    'port': 1,
+                    'target': 'srvfoo.unit.tests.',
+                }
+            ],
+        },
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'txt1',
+        {'ttl': 8, 'type': 'TXT', 'value': 'txt singleton test'},
+    )
+)
+octo_records.append(
+    Record.new(
+        zone_private,
+        'txt2',
+        {
+            'ttl': 9,
+            'type': 'TXT',
+            'values': ['txt multiple test', 'txt multiple test 2'],
+        },
+    )
+)
+
+long_txt = "v=spf1 ip4:10.10.0.0/24 ip4:10.10.1.0/24 ip4:10.10.2.0/24"
+long_txt += " ip4:10.10.3.0/24 ip4:10.10.4.0/24 ip4:10.10.5.0/24 "
+long_txt += " 10.6.0/24 ip4:10.10.7.0/24 ip4:10.10.8.0/24 "
+long_txt += " ip4:10.10.10.0/24 ip4:10.10.11.0/24 ip4:10.10.12.0/24"
+long_txt += " ip4:10.10.13.0/24 ip4:10.10.14.0/24 ip4:10.10.15.0/24"
+long_txt += " ip4:10.10.16.0/24 ip4:10.10.17.0/24 ip4:10.10.18.0/24"
+long_txt += " ip4:10.10.19.0/24 ip4:10.10.20.0/24  ~all"
+octo_records.append(
+    Record.new(
+        zone_private,
+        'txt3',
+        {'ttl': 10, 'type': 'TXT', 'values': ['txt multiple test', long_txt]},
+    )
+)
+
+octo_records.append(
+    Record.new(
+        zone_private,
         'ptr2',
         {
             'ttl': 11,
@@ -483,11 +720,11 @@ class Test_DynamicAzureRecord(TestCase):
                 'rules': [{'geos': ['AF'], 'pool': 'one'}, {'pool': 'two'}],
             },
         }
-        octo_record = Record.new(zone, 'foo', data)
+        octo_record = Record.new(zone_public, 'foo', data)
         azure_record = _AzureRecord(
             'TestAzure', octo_record, traffic_manager=tm_profile
         )
-        self.assertEqual(azure_record.zone_name, zone.name[:-1])
+        self.assertEqual(azure_record.zone_name, zone_public.name[:-1])
         self.assertEqual(azure_record.relative_record_set_name, 'foo')
         self.assertEqual(azure_record.record_type, 'CNAME')
         self.assertEqual(azure_record.params['ttl'], 60)
@@ -519,7 +756,7 @@ class Test_CheckEndswithDot(TestCase):
 class Test_RootTrafficManagerName(TestCase):
     def test_root_traffic_manager_name(self):
         test = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={'ttl': 60, 'type': 'CNAME', 'value': 'default.unit.tests.'},
         )
@@ -529,7 +766,7 @@ class Test_RootTrafficManagerName(TestCase):
 class Test_GetMonitor(TestCase):
     def test_get_monitor(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -692,7 +929,7 @@ class TestAzureDnsProvider(TestCase):
         )
 
         # Fetch the client to force it to load the creds
-        provider._dns_client
+        provider.dns_client
 
         # set critical functions to return properly
         tm_list = provider._tm_client.profiles.list_by_resource_group
@@ -1040,21 +1277,21 @@ class TestAzureDnsProvider(TestCase):
         recordSet.target_resource = SubResource()
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
         record_list.return_value = rs
 
-        zone_list = provider._dns_client.zones.list_by_resource_group
-        zone_list.return_value = [zone]
+        zone_list = provider.dns_client.zones.list_by_resource_group
+        zone_list.return_value = [zone_public]
 
-        exists = provider.populate(zone)
+        exists = provider.populate(zone_public)
 
-        self.assertEqual(len(zone.records), 17)
+        self.assertEqual(len(zone_public.records), 17)
         self.assertTrue(exists)
 
     def test_azure_zones(self):
         provider = self._get_provider()
 
-        zone_list = provider._dns_client.zones.list_by_resource_group
+        zone_list = provider.dns_client.zones.list_by_resource_group
         zone_1 = AzureZone(location='global')
         # This is far from ideal but the
         # zone constructor doesn't let me set it on creation
@@ -1075,7 +1312,7 @@ class TestAzureDnsProvider(TestCase):
     def test_bad_zone_response(self):
         provider = self._get_provider()
 
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), 'Azure Error')
         self.assertEqual(provider._check_zone('unit.test', create=False), None)
 
@@ -1225,7 +1462,7 @@ class TestAzureDnsProvider(TestCase):
     def test_extra_changes_non_last_fallback_contains_default(self, mock_gtm):
         provider = self._get_provider()
 
-        desired = Zone(zone.name, sub_zones=[])
+        desired = Zone(zone_public.name, sub_zones=[])
         record = Record.new(
             desired,
             'foo',
@@ -1253,7 +1490,7 @@ class TestAzureDnsProvider(TestCase):
         changes = [Create(record)]
 
         # assert that no exception is raised
-        provider._extra_changes(zone, desired, changes)
+        provider._extra_changes(zone_public, desired, changes)
 
         # simulate duplicate endpoint and assert exception
         endpoint = Endpoint(target='dup.unit.tests.')
@@ -1261,14 +1498,14 @@ class TestAzureDnsProvider(TestCase):
             Profile(name='test-profile', endpoints=[endpoint, endpoint])
         ]
         with self.assertRaises(AzureException) as ctx:
-            provider._extra_changes(zone, desired, changes)
+            provider._extra_changes(zone_public, desired, changes)
         self.assertTrue('duplicate endpoint' in str(ctx.exception))
 
     def test_extra_changes_A_multi_defaults(self):
         provider = self._get_provider()
 
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'A',
@@ -1282,10 +1519,10 @@ class TestAzureDnsProvider(TestCase):
         )
 
         # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
+        desired = Zone(zone_public.name, sub_zones=[])
         desired.add_record(record)
         with self.assertRaises(AzureException) as ctx:
-            provider._extra_changes(zone, desired, [])
+            provider._extra_changes(zone_public, desired, [])
         self.assertTrue('multiple top-level values' in str(ctx.exception))
 
     def test_generate_tm_profile(self):
@@ -1363,13 +1600,13 @@ class TestAzureDnsProvider(TestCase):
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
+        record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertEqual(record2.dynamic._data(), record.dynamic._data())
 
         # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
+        desired = Zone(zone_public.name, sub_zones=[])
         desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
+        changes = provider._extra_changes(zone_public, desired, [])
         self.assertEqual(len(changes), 0)
 
     def test_dynamic_record(self):
@@ -1425,7 +1662,7 @@ class TestAzureDnsProvider(TestCase):
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
 
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -1471,7 +1708,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_fallback_is_default(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -1484,6 +1721,7 @@ class TestAzureDnsProvider(TestCase):
                     'rules': [{'geos': ['AF'], 'pool': 'def'}],
                 },
             },
+            lenient=True,
         )
 
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
@@ -1558,7 +1796,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_pool_contains_default(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -1578,6 +1816,7 @@ class TestAzureDnsProvider(TestCase):
                     'rules': [{'geos': ['AF'], 'pool': 'rr'}],
                 },
             },
+            lenient=True,
         )
 
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
@@ -1669,7 +1908,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_pool_contains_default_no_geo(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -1762,7 +2001,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_last_pool_contains_default_no_geo(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -1865,7 +2104,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_last_pool_equals_default_down(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -1940,7 +2179,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_intermediate_pool_contains_default_no_geo(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -2055,7 +2294,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_intermediate_pool_equals_default_no_geo(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'CNAME',
@@ -2141,7 +2380,7 @@ class TestAzureDnsProvider(TestCase):
         )
 
     def test_dynamic_unique_traffic_managers(self):
-        record = self._get_dynamic_record(zone)
+        record = self._get_dynamic_record(zone_public)
         data = {
             'type': record._type,
             'ttl': record.ttl,
@@ -2153,7 +2392,7 @@ class TestAzureDnsProvider(TestCase):
 
         seen = set()
         for name in record_names:
-            record = Record.new(zone, name, data=data)
+            record = Record.new(zone_public, name, data=data)
             tms = provider._generate_traffic_managers(record)
             for tm in tms:
                 self.assertNotIn(tm.name, seen)
@@ -2165,9 +2404,10 @@ class TestAzureDnsProvider(TestCase):
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
 
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
+                'octodns': {'lenient': True},
                 'type': 'CNAME',
                 'ttl': 60,
                 'value': 'default.unit.tests.',
@@ -2237,13 +2477,13 @@ class TestAzureDnsProvider(TestCase):
         )
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord)
+        record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertEqual(record2.dynamic._data(), record.dynamic._data())
 
         # test that extra changes doesn't show any changes
-        desired = Zone(zone.name, sub_zones=[])
+        desired = Zone(zone_public.name, sub_zones=[])
         desired.add_record(record)
-        changes = provider._extra_changes(zone, desired, [])
+        changes = provider._extra_changes(zone_public, desired, [])
         self.assertEqual(len(changes), 0)
 
     def test_dynamic_pool_status(self):
@@ -2386,7 +2626,7 @@ class TestAzureDnsProvider(TestCase):
 
         # _process_desired_zone shouldn't change anything when status value is
         # supported
-        zone1 = Zone(zone.name, sub_zones=[])
+        zone1 = Zone(zone_public.name, sub_zones=[])
         record.dynamic.pools['one'].data['values'][0]['status'] = 'down'
         zone1.add_record(record)
         zone2 = provider._process_desired_zone(zone1.copy())
@@ -2395,7 +2635,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_simple_process_desired_zone(self):
         # simple records should not get changed by _process_desired_zone
-        zone1 = Zone(zone.name, sub_zones=[])
+        zone1 = Zone(zone_public.name, sub_zones=[])
         record1 = Record.new(
             zone1,
             'foo',
@@ -2408,7 +2648,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_dynamic_A(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'A',
@@ -2539,7 +2779,7 @@ class TestAzureDnsProvider(TestCase):
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
         # sync is called once for each profile, plus 1 at the end for nested
         # endpoints to workaround A/AAAA nesting limitation in Azure
@@ -2550,12 +2790,12 @@ class TestAzureDnsProvider(TestCase):
         azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord, lenient=True)
+        record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertEqual(record2.values, [])
 
     def test_dynamic_AAAA(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'AAAA',
@@ -2626,7 +2866,7 @@ class TestAzureDnsProvider(TestCase):
 
         # test that the record and ATM profile gets created
         tm_sync = provider._tm_client.profiles.create_or_update
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
         # sync is called once for each profile, plus 1 at the end for nested
         # endpoints to workaround A/AAAA nesting limitation in Azure
@@ -2637,12 +2877,12 @@ class TestAzureDnsProvider(TestCase):
         azrecord = RecordSet(ttl=60, target_resource=SubResource(id=None))
         azrecord.name = record.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
-        record2 = provider._populate_record(zone, azrecord, lenient=True)
+        record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertEqual(record2.values, [])
 
     def test_always_serve_disabled(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'AAAA',
@@ -2692,7 +2932,7 @@ class TestAzureDnsProvider(TestCase):
 
     def test_always_serve_enabled(self):
         record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={
                 'type': 'AAAA',
@@ -2857,10 +3097,11 @@ class TestAzureDnsProvider(TestCase):
         deletes = [Delete(r) for r in octo_records]
 
         self.assertEqual(
-            expected_n, provider.apply(Plan(None, zone, changes, True))
+            expected_n, provider.apply(Plan(None, zone_public, changes, True))
         )
         self.assertEqual(
-            expected_n, provider.apply(Plan(zone, zone, deletes, True))
+            expected_n,
+            provider.apply(Plan(zone_public, zone_public, deletes, True)),
         )
 
     def test_apply_create_dynamic(self):
@@ -2871,7 +3112,7 @@ class TestAzureDnsProvider(TestCase):
 
         tm_sync = provider._tm_client.profiles.create_or_update
 
-        record = self._get_dynamic_record(zone)
+        record = self._get_dynamic_record(zone_public)
 
         profiles = self._get_tm_profiles(provider)
 
@@ -2880,7 +3121,7 @@ class TestAzureDnsProvider(TestCase):
         # the dynamic record
         self.assertEqual(tm_sync.call_count, len(profiles))
 
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         create.assert_called_once()
 
     def test_apply_create_root_ns_management(self):
@@ -2895,7 +3136,7 @@ class TestAzureDnsProvider(TestCase):
 
         # modification required
         record = Record.new(
-            zone,
+            zone_public,
             '',
             data={
                 'ttl': 3600,
@@ -2906,7 +3147,7 @@ class TestAzureDnsProvider(TestCase):
 
         provider._apply_Create(Create(record))
 
-        create = provider._dns_client.record_sets.create_or_update
+        create = provider.dns_client.record_sets.create_or_update
         create.assert_called_once_with(
             resource_group_name='mock_rg',
             zone_name='unit.tests',
@@ -2929,9 +3170,9 @@ class TestAzureDnsProvider(TestCase):
         tm_list = provider._tm_client.profiles.list_by_resource_group
         tm_list.return_value = []
         profiles = self._get_tm_profiles(provider)
-        dynamic_record = self._get_dynamic_record(zone)
+        dynamic_record = self._get_dynamic_record(zone_public)
         simple_record = Record.new(
-            zone,
+            zone_public,
             dynamic_record.name,
             data={'type': 'CNAME', 'ttl': 3600, 'value': 'cname.unit.tests.'},
         )
@@ -2939,7 +3180,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
@@ -2953,7 +3194,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -2969,7 +3210,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, len(profiles))
@@ -2995,7 +3236,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -3010,14 +3251,14 @@ class TestAzureDnsProvider(TestCase):
         azrecord.name = record1.name or '@'
         azrecord.type = f'Microsoft.Network/dnszones/{record1._type}'
 
-        record2 = provider._populate_record(zone, azrecord, lenient=True)
+        record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertIsNone(record2.value)
 
         change = Update(record2, record1)
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         tm_sync.assert_not_called()
@@ -3028,12 +3269,12 @@ class TestAzureDnsProvider(TestCase):
         # existing is simple, new is dynamic
         provider = self._get_provider()
         simple_record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={'type': 'A', 'ttl': 3600, 'values': ['1.1.1.1', '2.2.2.2']},
         )
         dynamic_record = Record.new(
-            zone,
+            zone_public,
             simple_record.name,
             data={
                 'type': 'A',
@@ -3059,7 +3300,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, plus 1 at the end for nested
@@ -3072,7 +3313,7 @@ class TestAzureDnsProvider(TestCase):
         # all profiles
         provider = self._get_provider()
         dynamic_record2 = Record.new(
-            zone,
+            zone_public,
             dynamic_record.name,
             data={
                 'type': dynamic_record._type,
@@ -3086,7 +3327,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         # sync is called once for each profile, extra call at the end is not
@@ -3100,12 +3341,12 @@ class TestAzureDnsProvider(TestCase):
         # existing is simple, new is dynamic that needs only one profile
         provider = self._get_provider()
         simple_record = Record.new(
-            zone,
+            zone_public,
             'foo',
             data={'type': 'A', 'ttl': 3600, 'values': ['1.1.1.1', '2.2.2.2']},
         )
         dynamic_record = Record.new(
-            zone,
+            zone_public,
             simple_record.name,
             data={
                 'type': 'A',
@@ -3160,7 +3401,7 @@ class TestAzureDnsProvider(TestCase):
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
             provider._tm_client.profiles.create_or_update,
-            provider._dns_client.record_sets.create_or_update,
+            provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
         self.assertEqual(tm_sync.call_count, 1)
@@ -3174,7 +3415,7 @@ class TestAzureDnsProvider(TestCase):
         change = Delete(record)
         provider._apply_Delete(change)
         dns_delete, tm_delete = (
-            provider._dns_client.record_sets.delete,
+            provider.dns_client.record_sets.delete,
             provider._tm_client.profiles.delete,
         )
         dns_delete.assert_called_once()
@@ -3190,7 +3431,7 @@ class TestAzureDnsProvider(TestCase):
 
         err_msg = 'The Resource \'Microsoft.Network/dnszones/unit2.test\' '
         err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         expected_n = len(octo_records)
@@ -3214,18 +3455,18 @@ class TestAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
         record_list.return_value = rs
 
         err_msg = 'The Resource \'Microsoft.Network/dnszones/unit3.test\' '
         err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider._dns_client.zones.get
+        _get = provider.dns_client.zones.get
         _get.side_effect = CloudError(Mock(status=404), err_msg)
 
         exists = provider.populate(Zone('unit3.test.', []))
         self.assertFalse(exists)
 
-        self.assertEqual(len(zone.records), 0)
+        self.assertEqual(len(zone_public.records), 0)
 
     def test_populate_caches_root_ns(self):
         provider = self._get_provider()
@@ -3249,7 +3490,7 @@ class TestAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'sub', 12, 'NS'
         rs.append(recordSet)
 
-        record_list = provider._dns_client.record_sets.list_by_dns_zone
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
         record_list.return_value = rs
 
         # zone will exist and have a mixture of NS records
@@ -3275,7 +3516,7 @@ class TestAzureDnsProvider(TestCase):
             'ns1-1.azure-dns.com.',
             'ns1-1.azure-dns.info.',
         ]
-        provider._dns_client.zones.create_or_update.return_value = test_zone
+        provider.dns_client.zones.create_or_update.return_value = test_zone
 
         # with create we'll fail to find it, create it, and grab it's root NS
         # record values
@@ -3366,3 +3607,333 @@ class TestAzureDnsProvider(TestCase):
         ret = provider._process_desired_zone(zone)
         # same object, no copy
         self.assertEqual(id(zone), id(ret))
+
+
+class TestPrivateAzureDnsProvider(TestCase):
+    @patch('octodns_azure.PrivateDnsManagementClient')
+    @patch('octodns_azure.ClientSecretCredential')
+    def _get_provider(self, mock_css, mock_client):
+        '''Returns a mock AzureProvider object to use in testing.
+
+        :param mock_spc: placeholder
+        :type  mock_spc: str
+        :param mock_client: placeholder
+        :type  mock_client: str
+        :param mock_tm_client: placeholder
+        :type  mock_tm_client: str
+
+        :type return: AzureProvider
+        '''
+        provider = AzurePrivateProvider(
+            'mock_id',
+            'mock_client',
+            'mock_key',
+            'mock_directory',
+            'mock_sub',
+            'mock_rg',
+            strict_supports=False,
+        )
+
+        # Fetch the client to force it to load the creds
+        provider.dns_client
+
+        return provider
+
+    def _get_dynamic_record(self, zone):
+        return Record.new(
+            zone,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'default.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {
+                            'values': [
+                                {'value': 'one.unit.tests.', 'weight': 1}
+                            ],
+                            'fallback': 'two',
+                        },
+                        'two': {
+                            'values': [
+                                {'value': 'two1.unit.tests.', 'weight': 3},
+                                {'value': 'two2.unit.tests.', 'weight': 4},
+                            ],
+                            'fallback': 'three',
+                        },
+                        'three': {
+                            'values': [
+                                {'value': 'three.unit.tests.', 'weight': 1}
+                            ]
+                        },
+                    },
+                    'rules': [
+                        {
+                            'geos': ['AF', 'EU-DE', 'NA-US-CA', 'OC'],
+                            'pool': 'one',
+                        },
+                        {'pool': 'two'},
+                    ],
+                },
+                'octodns': {
+                    'healthcheck': {
+                        'path': '/_ping',
+                        'port': 4443,
+                        'protocol': 'HTTPS',
+                    }
+                },
+            },
+        )
+
+    def _get_dynamic_package(self):
+        '''Convenience function to setup a sample dynamic record.'''
+        provider = self._get_provider()
+
+        # setup zone with dynamic record
+        zone = Zone(name='unit.tests.', sub_zones=[])
+        record = self._get_dynamic_record(zone)
+        zone.add_record(record)
+
+        # return everything
+        return provider, zone, record
+
+    def test_populate_records(self):
+        provider = self._get_provider()
+
+        rs = []
+        recordSet = RecordSet(a_records=[ARecord(ipv4_address='1.1.1.1')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'a1', 0, 'A'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            a_records=[
+                ARecord(ipv4_address='1.1.1.1'),
+                ARecord(ipv4_address='2.2.2.2'),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        aaaa1 = AaaaRecord(ipv6_address='1:1ec:1::1')
+        recordSet = RecordSet(aaaa_records=[aaaa1])
+        recordSet.name, recordSet.ttl, recordSet.type = 'aaaa1', 2, 'AAAA'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        aaaa2 = AaaaRecord(ipv6_address='1:1ec:1::2')
+        recordSet = RecordSet(aaaa_records=[aaaa1, aaaa2])
+        recordSet.name, recordSet.ttl, recordSet.type = 'aaaa2', 3, 'AAAA'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            caa_records=[
+                CaaRecord(flags=0, tag='issue', value='caa1.unit.tests')
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'caa1', 4, 'CAA'
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            caa_records=[
+                CaaRecord(flags=0, tag='issue', value='caa1.unit.tests'),
+                CaaRecord(flags=0, tag='issue', value='caa2.unit.tests'),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'caa2', 4, 'CAA'
+        rs.append(recordSet)
+        cname1 = CnameRecord(cname='cname.unit.test.')
+        recordSet = RecordSet(cname_record=cname1)
+        recordSet.name, recordSet.ttl, recordSet.type = 'cname1', 5, 'CNAME'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            mx_records=[MxRecord(preference=10, exchange='mx1.unit.test.')]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'mx1', 7, 'MX'
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            mx_records=[
+                MxRecord(preference=10, exchange='mx1.unit.test.'),
+                MxRecord(preference=11, exchange='mx2.unit.test.'),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'mx2', 8, 'MX'
+        rs.append(recordSet)
+        recordSet = RecordSet(ns_records=[NsRecord(nsdname='ns1.unit.test.')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'ns1', 9, 'NS'
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            ns_records=[
+                NsRecord(nsdname='ns1.unit.test.'),
+                NsRecord(nsdname='ns2.unit.test.'),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'ns2', 10, 'NS'
+        rs.append(recordSet)
+        ptr1 = PtrRecord(ptrdname='ptr1.unit.test.')
+        recordSet = RecordSet(ptr_records=[ptr1])
+        recordSet.name, recordSet.ttl, recordSet.type = 'ptr1', 11, 'PTR'
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            srv_records=[
+                SrvRecord(priority=1, weight=2, port=3, target='1unit.tests.')
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = '_srv1._tcp', 13, 'SRV'
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            srv_records=[
+                SrvRecord(priority=1, weight=2, port=3, target='1unit.tests.'),
+                SrvRecord(priority=4, weight=5, port=6, target='2unit.tests.'),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = '_srv2._tcp', 14, 'SRV'
+        rs.append(recordSet)
+        recordSet = RecordSet(txt_records=[TxtRecord(value='sample text1')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'txt1', 15, 'TXT'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            txt_records=[
+                TxtRecord(value='sample text1'),
+                TxtRecord(value='sample text2'),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'txt2', 16, 'TXT'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        recordSet = RecordSet(soa_record=[SoaRecord()])
+        recordSet.name, recordSet.ttl, recordSet.type = '', 17, 'SOA'
+        rs.append(recordSet)
+        long_txt = "v=spf1 ip4:10.10.0.0/24 ip4:10.10.1.0/24 ip4:10.10.2.0/24"
+        long_txt += " ip4:10.10.3.0/24 ip4:10.10.4.0/24 ip4:10.10.5.0/24 "
+        long_txt += " 10.6.0/24 ip4:10.10.7.0/24 ip4:10.10.8.0/24 "
+        long_txt += " ip4:10.10.10.0/24 ip4:10.10.11.0/24 ip4:10.10.12.0/24"
+        long_txt += " ip4:10.10.13.0/24 ip4:10.10.14.0/24 ip4:10.10.15.0/24"
+        long_txt += " ip4:10.10.16.0/24 ip4:10.10.17.0/24 ip4:10.10.18.0/24"
+        long_txt += " ip4:10.10.19.0/24 ip4:10.10.20.0/24  ~all"
+        recordSet = RecordSet(
+            txt_records=[
+                TxtRecord(value='sample value1'),
+                TxtRecord(value=long_txt),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'txt3', 18, 'TXT'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+
+        record_list = provider.dns_client.record_sets.list
+        record_list.return_value = rs
+
+        zone_list = provider.dns_client.private_zones.list_by_resource_group
+        zone_list.return_value = [zone_private]
+
+        exists = provider.populate(zone_private)
+
+        self.assertEqual(len(zone_private.records), 17)
+        self.assertTrue(exists)
+
+    def test_azure_zones(self):
+        provider = self._get_provider()
+
+        zone_list = provider.dns_client.private_zones.list_by_resource_group
+        zone_1 = AzurePrivateZone(location='global')
+        # This is far from ideal but the
+        # zone constructor doesn't let me set it on creation
+        zone_1.name = "zone-1"
+        zone_2 = AzurePrivateZone(location='global')
+        # This is far from ideal but the
+        # zone constructor doesn't let me set it on creation
+        zone_2.name = "zone-2"
+        zone_list.return_value = [zone_1, zone_2, zone_1]
+
+        zones = provider._azure_zones
+        self.assertTrue(zone_1.name in zones)
+        self.assertTrue(zone_2.name in zones)
+
+        # This should be returning two zones since two zones are the same
+        self.assertEqual(len(provider._azure_zones), 2)
+
+    def test_bad_zone_response(self):
+        provider = self._get_provider()
+
+        _get = provider.dns_client.private_zones.get
+        _get.side_effect = CloudError(Mock(status=404), 'Azure Error')
+        self.assertEqual(provider._check_zone('unit.test', create=False), None)
+
+    def test_simple_process_desired_zone(self):
+        # simple records should not get changed by _process_desired_zone
+        zone1 = Zone(zone_private.name, sub_zones=[])
+        record1 = Record.new(
+            zone1,
+            'foo',
+            data={'type': 'CNAME', 'ttl': 86400, 'value': 'one.unit.tests.'},
+        )
+        zone1.add_record(record1)
+        zone2 = self._get_provider()._process_desired_zone(zone1.copy())
+        record2 = list(zone2.records)[0]
+        self.assertTrue(record1.data, record2.data)
+
+    def test_apply(self):
+        provider = self._get_provider()
+
+        expected_n = len(octo_records)
+        half = int(expected_n / 2)
+        changes = [Create(r) for r in octo_records[:half]] + [
+            Update(r, r) for r in octo_records[half:]
+        ]
+        deletes = [Delete(r) for r in octo_records]
+
+        self.assertEqual(
+            expected_n, provider.apply(Plan(None, zone_public, changes, True))
+        )
+        self.assertEqual(
+            expected_n,
+            provider.apply(Plan(zone_public, zone_public, deletes, True)),
+        )
+
+    def test_create_zone(self):
+        provider = self._get_provider()
+
+        changes = []
+        for i in octo_records:
+            changes.append(Create(i))
+        desired = Zone('unit2.test.', [])
+
+        err_msg = 'The Resource \'Microsoft.Network/dnszones/unit2.test\' '
+        err_msg += 'under resource group \'mock_rg\' was not found.'
+        _get = provider.dns_client.zones.get
+        _get.side_effect = CloudError(Mock(status=404), err_msg)
+
+        expected_n = len(octo_records)
+        self.assertEqual(
+            expected_n, provider.apply(Plan(None, desired, changes, True))
+        )
+
+    def test_check_zone_no_create(self):
+        provider = self._get_provider()
+
+        rs = []
+        recordSet = RecordSet(a_records=[ARecord(ipv4_address='1.1.1.1')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'a1', 0, 'A'
+        rs.append(recordSet)
+        recordSet = RecordSet(
+            a_records=[
+                ARecord(ipv4_address='1.1.1.1'),
+                ARecord(ipv4_address='2.2.2.2'),
+            ]
+        )
+        recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
+        rs.append(recordSet)
+
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
+        record_list.return_value = rs
+
+        err_msg = 'The Resource \'Microsoft.Network/dnszones/unit3.test\' '
+        err_msg += 'under resource group \'mock_rg\' was not found.'
+        _get = provider.dns_client.zones.get
+        _get.side_effect = CloudError(Mock(status=404), err_msg)
+
+        exists = provider.populate(Zone('unit3.test.', []))
+        self.assertFalse(exists)
+
+        self.assertEqual(len(zone_private.records), 0)

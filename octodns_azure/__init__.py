@@ -23,6 +23,8 @@ from azure.mgmt.dns.models import (
     TxtRecord,
     Zone,
 )
+from azure.mgmt.privatedns import PrivateDnsManagementClient
+from azure.mgmt.privatedns.models import PrivateZone
 from azure.mgmt.trafficmanager import TrafficManagerManagementClient
 from azure.mgmt.trafficmanager import __version__ as trafficmanager_version
 from azure.mgmt.trafficmanager.models import (
@@ -534,63 +536,10 @@ def _octo_status_to_azure_ep_alwaysserve(octo_status):
     return status_map[octo_status]
 
 
-class AzureProvider(BaseProvider):
-    '''
-    Azure DNS Provider
-
-    azuredns.py:
-        class: octodns.provider.azuredns.AzureProvider
-        # Current support of authentication of access to Azure services only
-        # includes using a Service Principal:
-        # https://docs.microsoft.com/en-us/azure/azure-resource-manager/
-        #                        resource-group-create-service-principal-portal
-        # The Azure Active Directory Application ID (aka client ID):
-        client_id:
-        # Authentication Key Value: (note this should be secret)
-        key:
-        # Directory ID (aka tenant ID):
-        directory_id:
-        # Subscription ID:
-        sub_id:
-        # Resource Group name:
-        resource_group:
-        # All are required to authenticate.
-
-        Example config file with variables:
-            "
-            ---
-            providers:
-              config:
-                class: octodns.provider.yaml.YamlProvider
-                directory: ./config (example path to directory of zone files)
-              azuredns:
-                class: octodns.provider.azuredns.AzureProvider
-                client_id: env/AZURE_APPLICATION_ID
-                key: env/AZURE_AUTHENTICATION_KEY
-                directory_id: env/AZURE_DIRECTORY_ID
-                sub_id: env/AZURE_SUBSCRIPTION_ID
-                resource_group: 'TestResource1'
-
-            zones:
-              example.com.:
-                sources:
-                  - config
-                targets:
-                  - azuredns
-            "
-        The first four variables above can be hidden in environment variables
-        and octoDNS will automatically search for them in the shell. It is
-        possible to also hard-code into the config file: eg, resource_group.
-
-        Please read https://github.com/octodns/octodns/pull/706 for an overview
-        of how dynamic records are designed and caveats of using them.
-    '''
-
+class AzureBaseProvider(BaseProvider):
     SUPPORTS_GEO = False
-    SUPPORTS_DYNAMIC = True
     SUPPORTS_POOL_VALUE_STATUS = True
     SUPPORTS_MULTIVALUE_PTR = True
-    SUPPORTS_ROOT_NS = True
     SUPPORTS = set(
         ('A', 'AAAA', 'CAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV', 'TXT')
     )
@@ -603,14 +552,14 @@ class AzureProvider(BaseProvider):
         directory_id,
         sub_id,
         resource_group,
-        *args,
         client_total_retries=10,
         client_status_retries=3,
         authority="https://login.microsoftonline.com",
         base_url="https://management.azure.com",
+        *args,
         **kwargs,
     ):
-        self.log = getLogger(f'AzureProvider[{id}]')
+        self.log = getLogger(f'{self.__class__.__name__}[{id}]')
         self.log.debug(
             '__init__: id=%s, client_id=%s, '
             'key=***, directory_id:%s, authority:%s, '
@@ -635,8 +584,7 @@ class AzureProvider(BaseProvider):
         self._client_subscription_id = sub_id
         self.__client_credential = None
 
-        self.__dns_client = None
-        self.__tm_client = None
+        self._dns_client = None
 
         self._resource_group = resource_group
         self._traffic_managers = dict()
@@ -668,32 +616,11 @@ class AzureProvider(BaseProvider):
         return self.__client_credential
 
     @property
-    def _dns_client(self):
-        if self.__dns_client is None:
-            self.__dns_client = DnsManagementClient(
-                credential=self._client_credential,
-                subscription_id=self._client_subscription_id,
-                retry_policy=self._dns_client_retry_policy,
-                base_url=self._base_url,
-            )
-        return self.__dns_client
-
-    @property
-    def _tm_client(self):
-        if self.__tm_client is None:
-            self.__tm_client = TrafficManagerManagementClient(
-                credential=self._client_credential,
-                subscription_id=self._client_subscription_id,
-                base_url=self._base_url,
-            )
-        return self.__tm_client
-
-    @property
     def _azure_zones(self):
         if self.__azure_zones is None:
             self.log.debug('_azure_zones: loading')
             zones = set()
-            list_zones = self._dns_client.zones.list_by_resource_group
+            list_zones = self._dns_client_zones().list_by_resource_group
             for zone in list_zones(self._resource_group):
                 zones.add(zone.name.rstrip('.'))
             self.__azure_zones = zones
@@ -720,10 +647,7 @@ class AzureProvider(BaseProvider):
         # If not, and its time to create, lets do it.
         if create:
             self.log.debug('_check_zone:no matching zone; creating %s', name)
-            create_zone = self._dns_client.zones.create_or_update
-            zone = create_zone(
-                self._resource_group, name, Zone(location='global')
-            )
+            zone = self._create_zone(name)
             self._azure_zones.add(name)
 
             # we create the zone so we should now be able to get its root ns
@@ -734,6 +658,280 @@ class AzureProvider(BaseProvider):
         else:
             # Else return nothing (aka false)
             return
+
+    def populate(self, zone, target=False, lenient=False):
+        '''Required function of manager.py to collect records from zone.
+
+        Special notes for Azure.
+        Azure zone names omit final '.'
+        Azure root records names are represented by '@'. OctoDNS uses ''
+        Azure records created through online interface may have null values
+        (eg, no IP address for A record).
+        Azure online interface allows constructing records with null values
+        which are destroyed by _apply.
+
+        Specific quirks such as these are responsible for any non-obvious
+        parsing in this function and the functions '_params_for_*'.
+
+        :param zone: A dns zone
+        :type  zone: octodns.zone.Zone
+        :param target: Checks if Azure is source or target of config.
+                       Currently only supports as a target. Unused.
+        :type  target: bool
+        :param lenient: Unused. Check octodns.manager for usage.
+        :type  lenient: bool
+
+        :type return: void
+        '''
+        self.log.debug('populate: name=%s', zone.name)
+
+        exists = False
+        before = len(zone.records)
+
+        zone_name = zone.name[:-1]
+
+        if self._check_zone(zone_name):
+            exists = True
+            rg = self._resource_group
+            for azrecord in self._zone_records(rg, zone_name):
+                typ = _parse_azure_type(azrecord.type)
+                if typ not in self.SUPPORTS:
+                    continue
+
+                record = self._populate_record(zone, azrecord, lenient)
+                zone.add_record(record, lenient=lenient)
+
+                if record._type == 'NS' and record.name == '':
+                    # we have the root NS record, record its azure-dns values
+                    required_values = set(
+                        [v for v in record.values if 'azure-dns' in v]
+                    )
+                    self._required_root_ns_values[zone_name] = required_values
+
+        self.log.info(
+            'populate: found %s records, exists=%s',
+            len(zone.records) - before,
+            exists,
+        )
+        return exists
+
+    def _populate_record(self, zone, azrecord, lenient=False):
+        record_name = azrecord.name if azrecord.name != '@' else ''
+        typ = _parse_azure_type(azrecord.type)
+
+        data_for = getattr(self, f'_data_for_{typ}')
+        data = data_for(azrecord)
+        data['type'] = typ
+        data['ttl'] = azrecord.ttl
+        return Record.new(zone, record_name, data, source=self, lenient=lenient)
+
+    def _data_for_A(self, azrecord):
+        return {'values': [ar.ipv4_address for ar in azrecord.a_records]}
+
+    def _data_for_AAAA(self, azrecord):
+        return {'values': [ar.ipv6_address for ar in azrecord.aaaa_records]}
+
+    def _data_for_CAA(self, azrecord):
+        return {
+            'values': [
+                {'flags': ar.flags, 'tag': ar.tag, 'value': ar.value}
+                for ar in azrecord.caa_records
+            ]
+        }
+
+    def _data_for_CNAME(self, azrecord):
+        '''Parsing data from Azure DNS Client record call
+        :param azrecord: a return of a call to list azure records
+        :type  azrecord: azure.mgmt.dns.models.RecordSet
+
+        :type  return: dict
+        '''
+        return {'value': _check_endswith_dot(azrecord.cname_record.cname)}
+
+    def _data_for_MX(self, azrecord):
+        return {
+            'values': [
+                {'preference': ar.preference, 'exchange': ar.exchange}
+                for ar in azrecord.mx_records
+            ]
+        }
+
+    def _data_for_NS(self, azrecord):
+        vals = [ar.nsdname for ar in azrecord.ns_records]
+        return {'values': [_check_endswith_dot(val) for val in vals]}
+
+    def _data_for_PTR(self, azrecord):
+        vals = [ar.ptrdname for ar in azrecord.ptr_records]
+        return {'values': [_check_endswith_dot(val) for val in vals]}
+
+    def _data_for_SRV(self, azrecord):
+        return {
+            'values': [
+                {
+                    'priority': ar.priority,
+                    'weight': ar.weight,
+                    'port': ar.port,
+                    'target': ar.target,
+                }
+                for ar in azrecord.srv_records
+            ]
+        }
+
+    def _data_for_TXT(self, azrecord):
+        return {
+            'values': [
+                escape_semicolon(reduce((lambda a, b: a + b), ar.value))
+                for ar in azrecord.txt_records
+            ]
+        }
+
+    def _apply_Delete(self, change):
+        '''A record from change must be deleted.
+
+        :param change: a change object
+        :type  change: octodns.record.Change
+
+        :type return: void
+        '''
+        record = change.existing
+        ar = _AzureRecord(self._resource_group, record, delete=True)
+
+        self._delete_record(
+            self._resource_group,
+            ar.zone_name,
+            ar.relative_record_set_name,
+            ar.record_type,
+        )
+
+        self.log.debug('*  Success Delete: %s', record)
+
+    def _apply(self, plan):
+        '''Required function of manager.py to actually apply a record change.
+
+        :param plan: Contains the zones and changes to be made
+        :type  plan: octodns.provider.base.Plan
+
+        :type return: void
+        '''
+        desired = plan.desired
+        changes = plan.changes
+        self.log.debug(
+            '_apply: zone=%s, len(changes)=%d', desired.name, len(changes)
+        )
+
+        azure_zone_name = desired.name[: len(desired.name) - 1]
+        self._check_zone(azure_zone_name, create=True)
+
+        '''
+        Force the operation order to be Delete() before all other operations.
+        Helps avoid problems in updating
+            - a CNAME record into an A record.
+            - an A record into a CNAME record.
+        '''
+
+        for change in changes:
+            class_name = change.__class__.__name__
+            if class_name == 'Delete':
+                self._apply_Delete(change)
+
+        for change in changes:
+            class_name = change.__class__.__name__
+            if class_name == 'Delete':
+                continue
+            getattr(self, f'_apply_{class_name}')(change)
+
+
+class AzureProvider(AzureBaseProvider):
+    '''
+    Azure DNS Provider
+
+    azuredns.py:
+        class: octodns_azure.AzureProvider
+        # Current support of authentication of access to Azure services only
+        # includes using a Service Principal:
+        # https://docs.microsoft.com/en-us/azure/azure-resource-manager/
+        #                        resource-group-create-service-principal-portal
+        # The Azure Active Directory Application ID (aka client ID):
+        client_id:
+        # Authentication Key Value: (note this should be secret)
+        key:
+        # Directory ID (aka tenant ID):
+        directory_id:
+        # Subscription ID:
+        sub_id:
+        # Resource Group name:
+        resource_group:
+        # All are required to authenticate.
+
+        Example config file with variables:
+            "
+            ---
+            providers:
+              config:
+                class: octodns.provider.yaml.YamlProvider
+                directory: ./config (example path to directory of zone files)
+              azuredns:
+                class: octodns_azure.AzureProvider
+                client_id: env/AZURE_APPLICATION_ID
+                key: env/AZURE_AUTHENTICATION_KEY
+                directory_id: env/AZURE_DIRECTORY_ID
+                sub_id: env/AZURE_SUBSCRIPTION_ID
+                resource_group: 'TestResource1'
+
+            zones:
+              example.com.:
+                sources:
+                  - config
+                targets:
+                  - azuredns
+            "
+        The first four variables above can be hidden in environment variables
+        and octoDNS will automatically search for them in the shell. It is
+        possible to also hard-code into the config file: eg, resource_group.
+
+        Please read https://github.com/octodns/octodns/pull/706 for an overview
+        of how dynamic records are designed and caveats of using them.
+    '''
+
+    SUPPORTS_ROOT_NS = True
+    SUPPORTS_DYNAMIC = True
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.__tm_client = None
+
+    @property
+    def dns_client(self):
+        if self._dns_client is None:
+            self._dns_client = DnsManagementClient(
+                credential=self._client_credential,
+                subscription_id=self._client_subscription_id,
+                retry_policy=self._dns_client_retry_policy,
+                base_url=self._base_url,
+            )
+        return self._dns_client
+
+    @property
+    def _tm_client(self):
+        if self.__tm_client is None:
+            self.__tm_client = TrafficManagerManagementClient(
+                credential=self._client_credential,
+                subscription_id=self._client_subscription_id,
+                base_url=self._base_url,
+            )
+        return self.__tm_client
+
+    def _dns_client_zones(self):
+        return self.dns_client.zones
+
+    def _create_zone(self, name):
+        create_zone = self.dns_client.zones.create_or_update
+        return create_zone(self._resource_group, name, Zone(location='global'))
+
+    def _zone_records(self, resource_group, name):
+        return self.dns_client.record_sets.list_by_dns_zone(
+            resource_group, name
+        )
 
     def _populate_traffic_managers(self):
         self.log.debug('traffic managers: loading')
@@ -775,72 +973,6 @@ class AzureProvider(BaseProvider):
         name = _root_traffic_manager_name(record)
         return self._get_tm_profile_by_name(name)
 
-    def populate(self, zone, target=False, lenient=False):
-        '''Required function of manager.py to collect records from zone.
-
-        Special notes for Azure.
-        Azure zone names omit final '.'
-        Azure root records names are represented by '@'. OctoDNS uses ''
-        Azure records created through online interface may have null values
-        (eg, no IP address for A record).
-        Azure online interface allows constructing records with null values
-        which are destroyed by _apply.
-
-        Specific quirks such as these are responsible for any non-obvious
-        parsing in this function and the functions '_params_for_*'.
-
-        :param zone: A dns zone
-        :type  zone: octodns.zone.Zone
-        :param target: Checks if Azure is source or target of config.
-                       Currently only supports as a target. Unused.
-        :type  target: bool
-        :param lenient: Unused. Check octodns.manager for usage.
-        :type  lenient: bool
-
-        :type return: void
-        '''
-        self.log.debug('populate: name=%s', zone.name)
-
-        exists = False
-        before = len(zone.records)
-
-        zone_name = zone.name[:-1]
-
-        records = self._dns_client.record_sets.list_by_dns_zone
-        if self._check_zone(zone_name):
-            exists = True
-            for azrecord in records(self._resource_group, zone_name):
-                typ = _parse_azure_type(azrecord.type)
-                if typ not in self.SUPPORTS:
-                    continue
-
-                record = self._populate_record(zone, azrecord, lenient)
-                zone.add_record(record, lenient=lenient)
-
-                if record._type == 'NS' and record.name == '':
-                    # we have the root NS record, record its azure-dns values
-                    required_values = set(
-                        [v for v in record.values if 'azure-dns' in v]
-                    )
-                    self._required_root_ns_values[zone_name] = required_values
-
-        self.log.info(
-            'populate: found %s records, exists=%s',
-            len(zone.records) - before,
-            exists,
-        )
-        return exists
-
-    def _populate_record(self, zone, azrecord, lenient=False):
-        record_name = azrecord.name if azrecord.name != '@' else ''
-        typ = _parse_azure_type(azrecord.type)
-
-        data_for = getattr(self, f'_data_for_{typ}')
-        data = data_for(azrecord)
-        data['type'] = typ
-        data['ttl'] = azrecord.ttl
-        return Record.new(zone, record_name, data, source=self, lenient=lenient)
-
     def _data_for_A(self, azrecord):
         if azrecord.a_records is None:
             if azrecord.target_resource.id:
@@ -855,7 +987,7 @@ class AzureProvider(BaseProvider):
             )
             return {'values': []}
 
-        return {'values': [ar.ipv4_address for ar in azrecord.a_records]}
+        return super()._data_for_A(azrecord)
 
     def _data_for_AAAA(self, azrecord):
         if azrecord.aaaa_records is None:
@@ -871,23 +1003,9 @@ class AzureProvider(BaseProvider):
             )
             return {'values': []}
 
-        return {'values': [ar.ipv6_address for ar in azrecord.aaaa_records]}
-
-    def _data_for_CAA(self, azrecord):
-        return {
-            'values': [
-                {'flags': ar.flags, 'tag': ar.tag, 'value': ar.value}
-                for ar in azrecord.caa_records
-            ]
-        }
+        return super()._data_for_AAAA(azrecord)
 
     def _data_for_CNAME(self, azrecord):
-        '''Parsing data from Azure DNS Client record call
-        :param azrecord: a return of a call to list azure records
-        :type  azrecord: azure.mgmt.dns.models.RecordSet
-
-        :type  return: dict
-        '''
         if azrecord.cname_record is None:
             if azrecord.target_resource.id:
                 return self._data_for_dynamic(azrecord)
@@ -901,44 +1019,7 @@ class AzureProvider(BaseProvider):
             )
             return {'value': None}
 
-        return {'value': _check_endswith_dot(azrecord.cname_record.cname)}
-
-    def _data_for_MX(self, azrecord):
-        return {
-            'values': [
-                {'preference': ar.preference, 'exchange': ar.exchange}
-                for ar in azrecord.mx_records
-            ]
-        }
-
-    def _data_for_NS(self, azrecord):
-        vals = [ar.nsdname for ar in azrecord.ns_records]
-        return {'values': [_check_endswith_dot(val) for val in vals]}
-
-    def _data_for_PTR(self, azrecord):
-        vals = [ar.ptrdname for ar in azrecord.ptr_records]
-        return {'values': [_check_endswith_dot(val) for val in vals]}
-
-    def _data_for_SRV(self, azrecord):
-        return {
-            'values': [
-                {
-                    'priority': ar.priority,
-                    'weight': ar.weight,
-                    'port': ar.port,
-                    'target': ar.target,
-                }
-                for ar in azrecord.srv_records
-            ]
-        }
-
-    def _data_for_TXT(self, azrecord):
-        return {
-            'values': [
-                escape_semicolon(reduce((lambda a, b: a + b), ar.value))
-                for ar in azrecord.txt_records
-            ]
-        }
+        return super()._data_for_CNAME(azrecord)
 
     def _get_geo_endpoints(self, root_profile):
         if root_profile.traffic_routing_method != 'Geographic':
@@ -1529,6 +1610,57 @@ class AzureProvider(BaseProvider):
 
         return traffic_managers
 
+    def _apply_Create(self, change):
+        '''A record from change must be created.
+
+        :param change: a change object
+        :type  change: octodns.record.Change
+
+        :type return: void
+        '''
+        record = change.new
+
+        # When a zone is first created we won't have had the required root NS
+        # values early on enough to deal with them in _process_desired_zone. We
+        # therefore have to do a secondary check here to make sure we're ok,
+        # if this change is for the root NS record.
+        if record._type == 'NS' and record.name == '':
+            record, modified = self._ensure_required_root_ns_values(record)
+            if modified:
+                self.log.warning(
+                    '_apply: required azure-dns.* root NS '
+                    'values missing from {new.fqdn}; adding '
+                    'them.'
+                )
+
+        dynamic = getattr(record, 'dynamic', False)
+        root_profile = None
+        endpoints = []
+        if dynamic:
+            profiles = self._generate_traffic_managers(record)
+            root_profile = profiles[-1]
+            if record._type in ['A', 'AAAA'] and len(profiles) > 1:
+                # A/AAAA records cannot be aliased to Traffic Managers that
+                # contain other nested Traffic Managers. To work around this
+                # limitation, we remove nesting before adding the record, and
+                # then add the nested endpoints later.
+                endpoints = root_profile.endpoints
+                root_profile.endpoints = []
+            self._sync_traffic_managers(profiles)
+
+        ar = _AzureRecord(
+            self._resource_group, record, traffic_manager=root_profile
+        )
+        self._create_or_update_record_sets(ar)
+
+        if endpoints:
+            # add nested endpoints for A/AAAA dynamic record limitation after
+            # record creation
+            root_profile.endpoints = endpoints
+            self._sync_traffic_managers([root_profile])
+
+        self.log.debug('*  Success Create: %s', record)
+
     def _sync_traffic_managers(self, desired_profiles):
         seen = set()
 
@@ -1587,7 +1719,7 @@ class AzureProvider(BaseProvider):
 
         Includes an adjustment for traffic mananager API version 1.1.0b1
         """
-        create = self._dns_client.record_sets.create_or_update
+        create = self.dns_client.record_sets.create_or_update
 
         # new version of traffic manager throws the following unless you use the id
         # for the target_resource
@@ -1609,57 +1741,6 @@ class AzureProvider(BaseProvider):
             record_type=ar.record_type,
             parameters=params,
         )
-
-    def _apply_Create(self, change):
-        '''A record from change must be created.
-
-        :param change: a change object
-        :type  change: octodns.record.Change
-
-        :type return: void
-        '''
-        record = change.new
-
-        # When a zone is first created we won't have had the required root NS
-        # values early on enough to deal with them in _process_desired_zone. We
-        # therefore have to do a secondary check here to make sure we're ok,
-        # if this change is for the root NS record.
-        if record._type == 'NS' and record.name == '':
-            record, modified = self._ensure_required_root_ns_values(record)
-            if modified:
-                self.log.warning(
-                    '_apply: required azure-dns.* root NS '
-                    'values missing from {new.fqdn}; adding '
-                    'them.'
-                )
-
-        dynamic = getattr(record, 'dynamic', False)
-        root_profile = None
-        endpoints = []
-        if dynamic:
-            profiles = self._generate_traffic_managers(record)
-            root_profile = profiles[-1]
-            if record._type in ['A', 'AAAA'] and len(profiles) > 1:
-                # A/AAAA records cannot be aliased to Traffic Managers that
-                # contain other nested Traffic Managers. To work around this
-                # limitation, we remove nesting before adding the record, and
-                # then add the nested endpoints later.
-                endpoints = root_profile.endpoints
-                root_profile.endpoints = []
-            self._sync_traffic_managers(profiles)
-
-        ar = _AzureRecord(
-            self._resource_group, record, traffic_manager=root_profile
-        )
-        self._create_or_update_record_sets(ar)
-
-        if endpoints:
-            # add nested endpoints for A/AAAA dynamic record limitation after
-            # record creation
-            root_profile.endpoints = endpoints
-            self._sync_traffic_managers([root_profile])
-
-        self.log.debug('*  Success Create: %s', record)
 
     def _apply_Update(self, change):
         '''A record from change must be created.
@@ -1721,60 +1802,152 @@ class AzureProvider(BaseProvider):
         self.log.debug('*  Success Update: %s', new)
 
     def _apply_Delete(self, change):
-        '''A record from change must be deleted.
+        record = change.existing
+        super()._apply_Delete(change)
+
+        if getattr(record, 'dynamic', False):
+            self._traffic_managers_gc(record, set())
+
+    def _delete_record(
+        self, resource_group, zone_name, relative_record_set_name, record_type
+    ):
+        delete = self.dns_client.record_sets.delete
+        delete(resource_group, zone_name, relative_record_set_name, record_type)
+
+
+class AzurePrivateProvider(AzureBaseProvider):
+    '''
+    Azure DNS Provider
+
+    azuredns.py:
+        class: octodns_azure.AzurePrivateProvider
+        # Current support of authentication of access to Azure services only
+        # includes using a Service Principal:
+        # https://docs.microsoft.com/en-us/azure/azure-resource-manager/
+        #                        resource-group-create-service-principal-portal
+        # The Azure Active Directory Application ID (aka client ID):
+        client_id:
+        # Authentication Key Value: (note this should be secret)
+        key:
+        # Directory ID (aka tenant ID):
+        directory_id:
+        # Subscription ID:
+        sub_id:
+        # Resource Group name:
+        resource_group:
+        # All are required to authenticate.
+
+        Example config file with variables:
+            "
+            ---
+            providers:
+              config:
+                class: octodns.provider.yaml.YamlProvider
+                directory: ./config (example path to directory of zone files)
+              azuredns:
+                class: octodns_azure.AzurePrivateProvider
+                client_id: env/AZURE_APPLICATION_ID
+                key: env/AZURE_AUTHENTICATION_KEY
+                directory_id: env/AZURE_DIRECTORY_ID
+                sub_id: env/AZURE_SUBSCRIPTION_ID
+                resource_group: 'TestResource1'
+
+            zones:
+              example.com.:
+                sources:
+                  - config
+                targets:
+                  - azuredns
+            "
+        The first four variables above can be hidden in environment variables
+        and octoDNS will automatically search for them in the shell. It is
+        possible to also hard-code into the config file: eg, resource_group.
+
+        Please read https://github.com/octodns/octodns/pull/706 for an overview
+        of how dynamic records are designed and caveats of using them.
+    '''
+
+    # private dns doesn't support name_servers
+    # https://learn.microsoft.com/en-us/python/api/azure-mgmt-privatedns/azure.mgmt.privatedns.models.privatezone?view=azure-python
+    SUPPORTS_ROOT_NS = False
+    # If enabled this would create public traffic managers which doesn't make
+    # sense.
+    SUPPORTS_DYNAMIC = False
+
+    @property
+    def dns_client(self):
+        if self._dns_client is None:
+            self._dns_client = PrivateDnsManagementClient(
+                credential=self._client_credential,
+                subscription_id=self._client_subscription_id,
+                base_url=self._base_url,
+            )
+        return self._dns_client
+
+    def _dns_client_zones(self):
+        return self.dns_client.private_zones
+
+    def _create_zone(self, name):
+        create_zone = self.dns_client.private_zones._create_or_update_initial
+        return create_zone(
+            self._resource_group, name, PrivateZone(location='global')
+        )
+
+    def _zone_records(self, resource_group, name):
+        return self.dns_client.record_sets.list(resource_group, name)
+
+    def _apply_Create(self, change):
+        '''A record from change must be created.
 
         :param change: a change object
         :type  change: octodns.record.Change
 
         :type return: void
         '''
-        record = change.record
-        ar = _AzureRecord(self._resource_group, record, delete=True)
-        delete = self._dns_client.record_sets.delete
+        record = change.new
+        ar = _AzureRecord(self._resource_group, record)
 
-        delete(
-            self._resource_group,
-            ar.zone_name,
-            ar.relative_record_set_name,
-            ar.record_type,
+        create = self.dns_client.record_sets.create_or_update
+        create(
+            resource_group_name=ar.resource_group,
+            private_zone_name=ar.zone_name,
+            relative_record_set_name=ar.relative_record_set_name,
+            record_type=ar.record_type,
+            parameters=ar.params,
         )
 
-        if getattr(record, 'dynamic', False):
-            self._traffic_managers_gc(record, set())
+        self.log.debug('*  Success Create: %s', record)
 
-        self.log.debug('*  Success Delete: %s', record)
+    def _apply_Update(self, change):
+        '''A record from change must be created.
 
-    def _apply(self, plan):
-        '''Required function of manager.py to actually apply a record change.
-
-        :param plan: Contains the zones and changes to be made
-        :type  plan: octodns.provider.base.Plan
+        :param change: a change object
+        :type  change: octodns.record.Change
 
         :type return: void
         '''
-        desired = plan.desired
-        changes = plan.changes
-        self.log.debug(
-            '_apply: zone=%s, len(changes)=%d', desired.name, len(changes)
+        new = change.new
+        ar = _AzureRecord(self._resource_group, new)
+
+        update = self.dns_client.record_sets.create_or_update
+        update(
+            resource_group_name=ar.resource_group,
+            private_zone_name=ar.zone_name,
+            relative_record_set_name=ar.relative_record_set_name,
+            record_type=ar.record_type,
+            parameters=ar.params,
         )
 
-        azure_zone_name = desired.name[: len(desired.name) - 1]
-        self._check_zone(azure_zone_name, create=True)
+        self.log.debug('*  Success Update: %s', new)
 
-        '''
-        Force the operation order to be Delete() before all other operations.
-        Helps avoid problems in updating
-            - a CNAME record into an A record.
-            - an A record into a CNAME record.
-        '''
-
-        for change in changes:
-            class_name = change.__class__.__name__
-            if class_name == 'Delete':
-                self._apply_Delete(change)
-
-        for change in changes:
-            class_name = change.__class__.__name__
-            if class_name == 'Delete':
-                continue
-            getattr(self, f'_apply_{class_name}')(change)
+    def _delete_record(
+        self, resource_group, zone_name, relative_record_set_name, record_type
+    ):
+        delete = self.dns_client.record_sets.delete
+        delete(
+            resource_group,
+            zone_name,
+            # these last 2 parms seem flipped from the non-private version
+            record_type,
+            relative_record_set_name,
+        )
