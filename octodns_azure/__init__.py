@@ -1654,6 +1654,7 @@ class AzureProvider(AzureBaseProvider):
         ar = _AzureRecord(
             self._resource_group, record, traffic_manager=root_profile
         )
+
         create = self.dns_client.record_sets.create_or_update
         create(
             resource_group_name=ar.resource_group,
@@ -1767,6 +1768,7 @@ class AzureProvider(AzureBaseProvider):
             ar = _AzureRecord(
                 self._resource_group, new, traffic_manager=profile
             )
+
             update = self.dns_client.record_sets.create_or_update
             update(
                 resource_group_name=ar.resource_group,
