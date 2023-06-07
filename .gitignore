@@ -11,4 +11,3 @@ env/
 htmlcov/
 nosetests.xml
 octodns_*.egg-info/
-pytest.ini
