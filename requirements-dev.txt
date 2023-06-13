@@ -10,12 +10,13 @@ coverage==7.2.7
 docutils==0.20.1
 exceptiongroup==1.1.1
 importlib-metadata==6.6.0
+importlib-resources==5.12.0
 iniconfig==2.0.0
 isort==5.11.5
 jaraco.classes==3.2.3
 jeepney==0.8.0
 keyring==23.13.1
-markdown-it-py==3.0.0
+markdown-it-py==2.2.0
 mdurl==0.1.2
 more-itertools==9.1.0
 mypy-extensions==1.0.0
@@ -25,7 +26,7 @@ pkginfo==1.9.6
 platformdirs==3.5.3
 pluggy==1.0.0
 pyflakes==3.0.1
-pyproject_hooks==1.0.0
+pyproject-hooks==1.0.0
 pytest-cov==4.1.0
 pytest-network==0.0.1
 pytest==7.3.2

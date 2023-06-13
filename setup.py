@@ -46,6 +46,8 @@ setup(
             'build>=0.7.0',
             # >=5.12.0 does not support python 3.7, we still do
             'isort==5.11.5',
+            # >=3.0.0 does not support python 3.7, we still do
+            'markdown-it-py<3.0.0',
             'pyflakes>=2.2.0',
             'readme_renderer[md]>=26.0',
             'twine>=3.4.2',
