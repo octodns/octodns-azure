@@ -2,7 +2,6 @@
 .coverage
 .eggs/
 .env
-.vscode/
 /build/
 /config/
 coverage.xml
