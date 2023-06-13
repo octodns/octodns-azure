@@ -728,10 +728,7 @@ class Test_DynamicAzureRecord(TestCase):
         self.assertEqual(azure_record.relative_record_set_name, 'foo')
         self.assertEqual(azure_record.record_type, 'CNAME')
         self.assertEqual(azure_record.params['ttl'], 60)
-        self.assertEqual(
-            azure_record.params['target_resource'],
-            SubResource(id=tm_profile.id),
-        )
+        self.assertEqual(azure_record.params['target_resource'], tm_profile)
 
 
 class Test_ParseAzureType(TestCase):

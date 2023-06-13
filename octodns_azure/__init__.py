@@ -18,7 +18,6 @@ from azure.mgmt.dns.models import (
     NsRecord,
     PtrRecord,
     SrvRecord,
-    SubResource,
     TxtRecord,
     Zone,
 )
@@ -131,12 +130,7 @@ class _AzureRecord(object):
         self.relative_record_set_name = record.name or '@'
         self.record_type = record._type
         self._record = record
-        # new version of traffic manager throws the following unless you use the
-        # SubResource object for the target_resource
-        # AttributeError: 'Profile' object has no attribute 'validate'
-        self.traffic_manager = (
-            SubResource(id=traffic_manager.id) if traffic_manager else None
-        )
+        self.traffic_manager = traffic_manager
 
         if delete:
             return
