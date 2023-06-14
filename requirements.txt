@@ -6,7 +6,7 @@ azure-common==1.1.28
 azure-core==1.27.1
 azure-identity==1.7.1
 azure-mgmt-core==1.4.0
-azure-mgmt-dns==8.1.0b1
+azure-mgmt-dns==8.1.0
 azure-mgmt-privatedns==1.0.0
 azure-mgmt-trafficmanager==1.1.0b1
 certifi==2023.5.7
