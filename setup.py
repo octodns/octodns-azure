@@ -46,6 +46,8 @@ setup(
             'build>=0.7.0',
             # >=5.12.0 does not support python 3.7, we still do
             'isort==5.11.5',
+            # >=3.0.0 does not support python 3.7, we still do
+            'markdown-it-py<3.0.0',
             'pyflakes>=2.2.0',
             'readme_renderer[md]>=26.0',
             'twine>=3.4.2',
@@ -54,9 +56,9 @@ setup(
     },
     install_requires=(
         'azure-identity>=1.7.1,<1.8.0',
-        'azure-mgmt-dns>=8.0.0,<8.1.0',
+        'azure-mgmt-dns>=8.1.0,<8.2.0',
         'azure-mgmt-privatedns>=1.0.0,<1.1.0',
-        'azure-mgmt-trafficmanager>=1.0.0,<1.1.0',
+        'azure-mgmt-trafficmanager>=1.1.0,<1.2.0',
         'msrestazure>=0.6.4,<0.7.0',
         'octodns>=0.9.16',
     ),

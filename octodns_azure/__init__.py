@@ -25,8 +25,10 @@ from azure.mgmt.privatedns import PrivateDnsManagementClient
 from azure.mgmt.privatedns.models import PrivateZone
 from azure.mgmt.trafficmanager import TrafficManagerManagementClient
 from azure.mgmt.trafficmanager.models import (
+    AlwaysServe,
     DnsConfig,
     Endpoint,
+    EndpointStatus,
     MonitorConfig,
     MonitorConfigCustomHeadersItem,
     Profile,
@@ -373,23 +375,11 @@ def _get_monitor(record):
 def _check_valid_dynamic(record):
     typ = record._type
     if typ in ['A', 'AAAA']:
-        defaults = set(record.values)
-        if len(defaults) > 1:
-            pools = record.dynamic.pools
-            vals = set(
-                v['value']
-                for _, pool in pools.items()
-                for v in pool._data()['values']
+        if len(record.values) > 1:
+            # we don't yet support multi-value defaults
+            raise AzureException(
+                f'{record.fqdn} {record._type}: Dynamic records do not support multiple top-level values'
             )
-            if defaults != vals:
-                # we don't yet support multi-value defaults, specifying all
-                # pool values allows for Traffic Manager profile optimization
-                raise AzureException(
-                    f'{record.fqdn} {record._type}: Values '
-                    'of A/AAAA dynamic records must either '
-                    'have a single value or contain all '
-                    'values from all pools'
-                )
     elif typ != 'CNAME':
         # dynamic records of unsupported type
         raise AzureException(
@@ -459,14 +449,22 @@ def _profile_is_match(have, desired):
         desired_endpoints = desired.endpoints
     endpoints = zip(have_endpoints, desired_endpoints)
     for have_endpoint, desired_endpoint in endpoints:
-        have_status = have_endpoint.endpoint_status or 'Enabled'
-        desired_status = desired_endpoint.endpoint_status or 'Enabled'
+        have_status = have_endpoint.endpoint_status or EndpointStatus.ENABLED
+        desired_status = (
+            desired_endpoint.endpoint_status or EndpointStatus.ENABLED
+        )
+
+        have_always_serve = have_endpoint.always_serve or AlwaysServe.DISABLED
+        desired_always_serve = (
+            desired_endpoint.always_serve or AlwaysServe.DISABLED
+        )
 
         # compare basic attributes
         if (
             have_endpoint.name != desired_endpoint.name
             or have_endpoint.type != desired_endpoint.type
             or have_status != desired_status
+            or have_always_serve != desired_always_serve
         ):
             return false(have_endpoint, desired_endpoint, have.name)
 
@@ -507,6 +505,32 @@ def _profile_is_match(have, desired):
             return False
 
     return True
+
+
+def _endpoint_flags_to_value_status(endpoint_status, always_serve):
+    """Convert between azure endpoint's endpoint_status and always_serve flags and octo's pool status flag"""
+    if endpoint_status is None:
+        endpoint_status = EndpointStatus.ENABLED
+    if always_serve is None:
+        always_serve = AlwaysServe.DISABLED
+
+    if endpoint_status == EndpointStatus.DISABLED:
+        # It doesn't matter what always_serve is if endpoint is disabled
+        return 'down'
+    elif always_serve == AlwaysServe.ENABLED:
+        return 'up'
+    else:
+        return 'obey'
+
+
+def _value_status_to_endpoint_flags(value_status):
+    """Convert between octo's pool status flag and azure endpoint's endpoint_status and always_serve flags"""
+    status_map = {
+        'down': (EndpointStatus.DISABLED, AlwaysServe.DISABLED),
+        'up': (EndpointStatus.ENABLED, AlwaysServe.ENABLED),
+        'obey': (EndpointStatus.ENABLED, AlwaysServe.DISABLED),
+    }
+    return status_map[value_status]
 
 
 class AzureBaseProvider(BaseProvider):
@@ -1084,9 +1108,9 @@ class AzureProvider(AzureBaseProvider):
                 defaults.add(val)
                 ep_name = ep_name[: -len('--default--')]
 
-            status = 'obey'
-            if pool_ep.endpoint_status == 'Disabled':
-                status = 'down'
+            status = _endpoint_flags_to_value_status(
+                pool_ep.endpoint_status, pool_ep.always_serve
+            )
 
             values.append(
                 {'value': val, 'weight': pool_ep.weight or 1, 'status': status}
@@ -1219,32 +1243,6 @@ class AzureProvider(AzureBaseProvider):
                     fallback = 'adding them'
                     self.supports_warn_or_except(msg, fallback)
                     desired.add_record(record, replace=True)
-            elif getattr(record, 'dynamic', False):
-                # check for status=up values
-                up_pools = []
-                for name, pool in record.dynamic.pools.items():
-                    for value in pool.data['values']:
-                        if value['status'] == 'up':
-                            # Azure only supports obey and down, not up
-                            up_pools.append(name)
-                            break
-                if not up_pools:
-                    continue
-
-                up_pools = ','.join(up_pools)
-                msg = (
-                    f'status=up is not supported for pools {up_pools} in '
-                    f'{record.fqdn}'
-                )
-                fallback = 'will ignore it and respect the healthcheck'
-                self.supports_warn_or_except(msg, fallback)
-
-                record = record.copy()
-                for pool in record.dynamic.pools.values():
-                    for value in pool.data['values']:
-                        if value['status'] == 'up':
-                            value['status'] = 'obey'
-                desired.add_record(record, replace=True)
 
         return super()._process_desired_zone(desired)
 
@@ -1386,8 +1384,10 @@ class AzureProvider(AzureBaseProvider):
             ep_name = f'{pool_name}--{target}'
             # Endpoint names cannot have colons, drop them from IPv6 addresses
             ep_name = ep_name.replace(':', '-')
-            ep_status = 'Disabled' if val['status'] == 'down' else 'Enabled'
-            if val['value'] in defaults:
+            ep_status, always_serve = _value_status_to_endpoint_flags(
+                val['status']
+            )
+            if val['value'] in defaults and val['status'] == 'up':
                 # mark default
                 ep_name += '--default--'
             endpoints.append(
@@ -1396,6 +1396,7 @@ class AzureProvider(AzureBaseProvider):
                     target=target,
                     weight=val.get('weight', 1),
                     endpoint_status=ep_status,
+                    always_serve=always_serve,
                 )
             )
 
@@ -1411,14 +1412,13 @@ class AzureProvider(AzureBaseProvider):
         first_value = pool_values[0]
 
         if len(pool_values) > 1 or (
-            first_value['value'] in defaults and first_value['status'] != 'obey'
+            first_value['value'] in defaults and first_value['status'] != 'up'
         ):
             # create Weighted profile for multi-value pool
             #
-            # or if a single-value pool has the default as its member and isn't enabled
+            # or if a single-value pool has the default as its member and it's status is not 'up'
             # ^^ is because a TM profile does not allow multiple endpoints for the same FQDN, so we
             # branch off into a nested profile so we can add the default as the last priority endpoint.
-            # TODO: change `status!=obey` conditional to `status!=up` when the support lands
             pool_profile = pool_profiles.get(pool_name)
             if not pool_profile:
                 pool_profile = self._make_pool_profile(pool, record, defaults)
@@ -1436,7 +1436,9 @@ class AzureProvider(AzureBaseProvider):
             # value as an external endpoint to fallback rule profile
             value = pool_values[0]
             ep_name = pool_name
-            ep_status = 'Disabled' if value['status'] == 'down' else 'Enabled'
+            ep_status, always_serve = _value_status_to_endpoint_flags(
+                value['status']
+            )
             target = value['value']
             if target in defaults:
                 # mark default
@@ -1449,6 +1451,7 @@ class AzureProvider(AzureBaseProvider):
                 target=target,
                 priority=priority,
                 endpoint_status=ep_status,
+                always_serve=always_serve,
             )
 
     def _make_rule_profile(
@@ -1485,6 +1488,7 @@ class AzureProvider(AzureBaseProvider):
                     target=rule_ep.target,
                     geo_mapping=geos,
                     endpoint_status=rule_ep.endpoint_status,
+                    always_serve=rule_ep.always_serve,
                 )
 
     def _make_rule(
@@ -1516,24 +1520,29 @@ class AzureProvider(AzureBaseProvider):
             endpoints.append(rule_ep)
 
             if not default_seen and any(
-                val['value'] in defaults and val['status'] == 'obey'
+                val['value'] in defaults and val['status'] == 'up'
                 for val in pool.data['values']
             ):
-                # TODO: change `status=obey` conditional to `status=up` when the support lands
                 default_seen = True
 
             priority += 1
             pool_name = pool.data.get('fallback')
 
-        # append default endpoint unless it is already included in last pool
-        # of rule profile
+        # append default endpoint unless it is already included in a pool with status=up
         if not default_seen:
             default = defaults[0]
             if record._type == 'CNAME':
                 default = default[:-1]
-            # TODO: set status=up when the support lands
+            # default should always be up
+            ep_status, always_serve = _value_status_to_endpoint_flags('up')
             endpoints.append(
-                Endpoint(name='--default--', target=default, priority=priority)
+                Endpoint(
+                    name='--default--',
+                    target=default,
+                    priority=priority,
+                    endpoint_status=ep_status,
+                    always_serve=always_serve,
+                )
             )
 
         return self._make_rule_profile(

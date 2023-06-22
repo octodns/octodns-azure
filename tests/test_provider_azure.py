@@ -22,8 +22,10 @@ from azure.mgmt.dns.models import (
 from azure.mgmt.dns.models import Zone as AzureZone
 from azure.mgmt.privatedns.models import PrivateZone as AzurePrivateZone
 from azure.mgmt.trafficmanager.models import (
+    AlwaysServe,
     DnsConfig,
     Endpoint,
+    EndpointStatus,
     MonitorConfig,
     MonitorConfigCustomHeadersItem,
     Profile,
@@ -821,6 +823,7 @@ class Test_ProfileIsMatch(TestCase):
             endpoint_name='name',
             endpoint_type='profile/nestedEndpoints',
             endpoint_status=None,
+            always_serve=None,
             target='target.unit.tests',
             target_id='resource/id',
             geos=['GEO-AF'],
@@ -845,6 +848,7 @@ class Test_ProfileIsMatch(TestCase):
                         name=endpoint_name,
                         type=endpoint_type,
                         endpoint_status=endpoint_status,
+                        always_serve=always_serve,
                         target=target,
                         target_resource_id=target_id,
                         geo_mapping=geos,
@@ -867,7 +871,9 @@ class Test_ProfileIsMatch(TestCase):
         self.assertFalse(is_match(profile(), profile(endpoint_name='a')))
         self.assertFalse(is_match(profile(), profile(endpoint_type='b')))
         self.assertFalse(
-            is_match(profile(), profile(endpoint_status='Disabled'))
+            is_match(
+                profile(), profile(endpoint_status=EndpointStatus.DISABLED)
+            )
         )
         self.assertFalse(
             is_match(profile(endpoint_type='b'), profile(endpoint_type='b'))
@@ -1072,6 +1078,7 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='default.unit.tests',
                         priority=4,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -1099,6 +1106,7 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='default.unit.tests',
                         priority=3,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -1515,7 +1523,7 @@ class TestAzureDnsProvider(TestCase):
         desired.add_record(record)
         with self.assertRaises(AzureException) as ctx:
             provider._extra_changes(zone_public, desired, [])
-        self.assertTrue('single value' in str(ctx.exception))
+        self.assertTrue('multiple top-level values' in str(ctx.exception))
 
     def test_generate_tm_profile(self):
         provider, zone, record = self._get_dynamic_package()
@@ -1580,7 +1588,8 @@ class TestAzureDnsProvider(TestCase):
         # test that traffic managers profiles are generated as expected
         profiles = provider._generate_traffic_managers(record)
         self.assertEqual(len(expected_profiles), len(profiles))
-        for have, expected in zip(profiles, expected_profiles):
+        profiles_to_compare = zip(profiles, expected_profiles)
+        for have, expected in profiles_to_compare:
             self.assertTrue(_profile_is_match(have, expected))
 
         # check that dynamic record is populated back from profiles
@@ -1690,6 +1699,7 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             priority=2,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 )
@@ -1715,25 +1725,72 @@ class TestAzureDnsProvider(TestCase):
         )
 
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
         self._validate_dynamic(
             record,
             [
+                Profile(
+                    name='foo--unit--tests-pool-def',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-pool-def', ttl=60
+                    ),
+                    monitor_config=monitor,
+                    endpoints=[
+                        Endpoint(
+                            name='def--default.unit.tests',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                        )
+                    ],
+                ),
+                Profile(
+                    name='foo--unit--tests-rule-def',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-rule-def', ttl=60
+                    ),
+                    monitor_config=monitor,
+                    endpoints=[
+                        Endpoint(
+                            name='def',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-def'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                ),
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Geographic',
                     dns_config=DnsConfig(
                         relative_name='foo--unit--tests', ttl=60
                     ),
-                    monitor_config=_get_monitor(record),
+                    monitor_config=monitor,
                     endpoints=[
                         Endpoint(
-                            name='def--default--',
-                            type=external,
-                            target='default.unit.tests',
+                            name='def',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-rule-def'
+                            ),
                             geo_mapping=['GEO-AF'],
                         )
                     ],
-                )
+                ),
             ],
         )
 
@@ -1789,7 +1846,7 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests--default--',
+                            name='rr--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
@@ -1799,6 +1856,32 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='final.unit.tests',
                             weight=1,
+                        ),
+                    ],
+                ),
+                Profile(
+                    name='foo--unit--tests-rule-rr',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-rule-rr', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-rr'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
@@ -1814,7 +1897,7 @@ class TestAzureDnsProvider(TestCase):
                             name='rr',
                             type=nested,
                             target_resource_id=name_to_id(
-                                'foo--unit--tests-pool-rr'
+                                'foo--unit--tests-rule-rr'
                             ),
                             geo_mapping=['GEO-AF'],
                         )
@@ -1848,14 +1931,16 @@ class TestAzureDnsProvider(TestCase):
         )
 
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
         self._validate_dynamic(
             record,
             [
                 Profile(
-                    name='foo--unit--tests',
+                    name='foo--unit--tests-pool-rr',
                     traffic_routing_method='Weighted',
                     dns_config=DnsConfig(
-                        relative_name='foo--unit--tests', ttl=60
+                        relative_name='foo--unit--tests-pool-rr', ttl=60
                     ),
                     monitor_config=_get_monitor(record),
                     endpoints=[
@@ -1872,7 +1957,7 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests--default--',
+                            name='rr--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
@@ -1884,7 +1969,33 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                     ],
-                )
+                ),
+                Profile(
+                    name='foo--unit--tests',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='rr',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-rr'
+                            ),
+                            priority=1,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                ),
             ],
         )
 
@@ -1943,7 +2054,7 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests--default--',
+                            name='rr--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
@@ -1977,6 +2088,14 @@ class TestAzureDnsProvider(TestCase):
                                 'foo--unit--tests-pool-rr'
                             ),
                             priority=2,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=3,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
@@ -2021,11 +2140,11 @@ class TestAzureDnsProvider(TestCase):
                     monitor_config=_get_monitor(record),
                     endpoints=[
                         Endpoint(
-                            name='one--default.unit.tests--default--',
+                            name='one--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
-                            endpoint_status='Disabled',
+                            endpoint_status=EndpointStatus.DISABLED,
                         )
                     ],
                 ),
@@ -2050,6 +2169,8 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
@@ -2116,11 +2237,11 @@ class TestAzureDnsProvider(TestCase):
                             weight=1,
                         ),
                         Endpoint(
-                            name='rr--default.unit.tests--default--',
+                            name='rr--default.unit.tests',
                             type=external,
                             target='default.unit.tests',
                             weight=1,
-                            endpoint_status='Disabled',
+                            endpoint_status=EndpointStatus.DISABLED,
                         ),
                         Endpoint(
                             name='rr--final.unit.tests',
@@ -2163,6 +2284,8 @@ class TestAzureDnsProvider(TestCase):
                             type=external,
                             target='default.unit.tests',
                             priority=4,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
                         ),
                     ],
                 ),
@@ -2194,9 +2317,27 @@ class TestAzureDnsProvider(TestCase):
             },
         )
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
         self._validate_dynamic(
             record,
             [
+                Profile(
+                    name='foo--unit--tests-pool-two',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-pool-two', ttl=60
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='two--default.unit.tests',
+                            type=external,
+                            target='default.unit.tests',
+                            weight=1,
+                        )
+                    ],
+                ),
                 Profile(
                     name='foo--unit--tests',
                     traffic_routing_method='Priority',
@@ -2212,9 +2353,11 @@ class TestAzureDnsProvider(TestCase):
                             priority=1,
                         ),
                         Endpoint(
-                            name='two--default--',
-                            type=external,
-                            target='default.unit.tests',
+                            name='two',
+                            type=nested,
+                            target_resource_id=name_to_id(
+                                'foo--unit--tests-pool-two'
+                            ),
                             priority=2,
                         ),
                         Endpoint(
@@ -2223,8 +2366,16 @@ class TestAzureDnsProvider(TestCase):
                             target='three.unit.tests',
                             priority=3,
                         ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='default.unit.tests',
+                            priority=4,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
                     ],
-                )
+                ),
             ],
         )
 
@@ -2338,7 +2489,7 @@ class TestAzureDnsProvider(TestCase):
     def test_dynamic_pool_status(self):
         provider = self._get_provider()
         zone1 = Zone('unit.tests.', [])
-        record1 = Record.new(
+        record = Record.new(
             zone1,
             'foo',
             data={
@@ -2364,38 +2515,34 @@ class TestAzureDnsProvider(TestCase):
             },
         )
 
-        # status=up should be converted to obey
-        zone1.add_record(record1)
-        zone2 = provider._process_desired_zone(zone1.copy())
-        record2 = list(zone2.records)[0]
-        self.assertTrue(
-            record2.dynamic.pools['one'].data['values'][0]['status'], 'obey'
-        )
-
         # statuses are correctly converted to traffic manager profiles and back
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
         nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
         name_to_id = provider._profile_name_to_id
+        monitor = _get_monitor(record)
         profiles = [
             Profile(
                 name='foo--unit--tests-rule-one',
                 traffic_routing_method='Priority',
                 dns_config=DnsConfig(
-                    relative_name='foo--unit--tests-rule-one', ttl=record2.ttl
+                    relative_name='foo--unit--tests-rule-one', ttl=record.ttl
                 ),
-                monitor_config=_get_monitor(record2),
+                monitor_config=monitor,
                 endpoints=[
                     Endpoint(
                         name='one',
                         type=external,
                         target='one1.unit.tests',
                         priority=1,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                     Endpoint(
                         name='--default--',
                         type=external,
                         target='default.unit.tests',
                         priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -2403,16 +2550,16 @@ class TestAzureDnsProvider(TestCase):
                 name='foo--unit--tests-pool-two',
                 traffic_routing_method='Weighted',
                 dns_config=DnsConfig(
-                    relative_name='foo--unit--tests-pool-two', ttl=record2.ttl
+                    relative_name='foo--unit--tests-pool-two', ttl=record.ttl
                 ),
-                monitor_config=_get_monitor(record2),
+                monitor_config=monitor,
                 endpoints=[
                     Endpoint(
                         name='two--two1.unit.tests',
                         type=external,
                         target='two1.unit.tests',
                         weight=1,
-                        endpoint_status='Disabled',
+                        endpoint_status=EndpointStatus.DISABLED,
                     ),
                     Endpoint(
                         name='two--two2.unit.tests',
@@ -2426,9 +2573,9 @@ class TestAzureDnsProvider(TestCase):
                 name='foo--unit--tests-rule-two',
                 traffic_routing_method='Priority',
                 dns_config=DnsConfig(
-                    relative_name='foo--unit--tests-rule-two', ttl=record2.ttl
+                    relative_name='foo--unit--tests-rule-two', ttl=record.ttl
                 ),
-                monitor_config=_get_monitor(record2),
+                monitor_config=monitor,
                 endpoints=[
                     Endpoint(
                         name='two',
@@ -2443,6 +2590,8 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='default.unit.tests',
                         priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -2450,9 +2599,9 @@ class TestAzureDnsProvider(TestCase):
                 name='foo--unit--tests',
                 traffic_routing_method='Geographic',
                 dns_config=DnsConfig(
-                    relative_name='foo--unit--tests', ttl=record2.ttl
+                    relative_name='foo--unit--tests', ttl=record.ttl
                 ),
-                monitor_config=_get_monitor(record2),
+                monitor_config=monitor,
                 endpoints=[
                     Endpoint(
                         name='one',
@@ -2473,16 +2622,16 @@ class TestAzureDnsProvider(TestCase):
                 ],
             ),
         ]
-        self._validate_dynamic(record2, profiles)
+        self._validate_dynamic(record, profiles)
 
         # _process_desired_zone shouldn't change anything when status value is
         # supported
         zone1 = Zone(zone_public.name, sub_zones=[])
-        record1.dynamic.pools['one'].data['values'][0]['status'] = 'down'
-        zone1.add_record(record1)
+        record.dynamic.pools['one'].data['values'][0]['status'] = 'down'
+        zone1.add_record(record)
         zone2 = provider._process_desired_zone(zone1.copy())
         record2 = list(zone2.records)[0]
-        self.assertTrue(record1.data, record2.data)
+        self.assertTrue(record.data, record2.data)
 
     def test_simple_process_desired_zone(self):
         # simple records should not get changed by _process_desired_zone
@@ -2571,6 +2720,8 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='9.9.9.9',
                         priority=3,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -2590,6 +2741,8 @@ class TestAzureDnsProvider(TestCase):
                         type=external,
                         target='9.9.9.9',
                         priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
             ),
@@ -2620,7 +2773,6 @@ class TestAzureDnsProvider(TestCase):
                 ],
             ),
         ]
-
         self._validate_dynamic(record, profiles)
 
         provider = self._get_provider()
@@ -2648,7 +2800,7 @@ class TestAzureDnsProvider(TestCase):
             data={
                 'type': 'AAAA',
                 'ttl': 60,
-                'values': ['1::1', '2::2'],
+                'values': ['f::f'],
                 'dynamic': {
                     'pools': {
                         'one': {
@@ -2660,29 +2812,53 @@ class TestAzureDnsProvider(TestCase):
             },
         )
         external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
         profiles = [
             Profile(
-                name='foo--unit--tests-AAAA',
+                name='foo--unit--tests-AAAA-pool-one',
                 traffic_routing_method='Weighted',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-aaaa-pool-one',
+                    ttl=record.ttl,
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one--1--1', type=external, target='1::1', weight=1
+                    ),
+                    Endpoint(
+                        name='one--2--2', type=external, target='2::2', weight=1
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-AAAA',
+                traffic_routing_method='Priority',
                 dns_config=DnsConfig(
                     relative_name='foo--unit--tests-aaaa', ttl=record.ttl
                 ),
-                monitor_config=_get_monitor(record),
+                monitor_config=monitor,
                 endpoints=[
                     Endpoint(
-                        name='one--1--1--default--',
-                        type=external,
-                        target='1::1',
-                        weight=1,
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-AAAA-pool-one'
+                        ),
+                        priority=1,
                     ),
                     Endpoint(
-                        name='one--2--2--default--',
+                        name='--default--',
                         type=external,
-                        target='2::2',
-                        weight=1,
+                        target='f::f',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
                     ),
                 ],
-            )
+            ),
         ]
         self._validate_dynamic(record, profiles)
 
@@ -2692,7 +2868,9 @@ class TestAzureDnsProvider(TestCase):
         tm_sync = provider._tm_client.profiles.create_or_update
         create = provider.dns_client.record_sets.create_or_update
         provider._apply_Create(Create(record))
-        self.assertEqual(tm_sync.call_count, len(profiles))
+        # sync is called once for each profile, plus 1 at the end for nested
+        # endpoints to workaround A/AAAA nesting limitation in Azure
+        self.assertEqual(tm_sync.call_count, len(profiles) + 1)
         create.assert_called_once()
 
         # test broken alias
@@ -2701,6 +2879,99 @@ class TestAzureDnsProvider(TestCase):
         azrecord.type = f'Microsoft.Network/dnszones/{record._type}'
         record2 = provider._populate_record(zone_public, azrecord, lenient=True)
         self.assertEqual(record2.values, [])
+
+    def test_always_serve_disabled(self):
+        record = Record.new(
+            zone_public,
+            'foo',
+            data={
+                'type': 'AAAA',
+                'ttl': 60,
+                'values': ['f::f'],
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': '1::1', 'status': 'down'}]}
+                    },
+                    'rules': [{'pool': 'one'}],
+                },
+            },
+        )
+
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        self._validate_dynamic(
+            record,
+            [
+                Profile(
+                    name='foo--unit--tests-AAAA',
+                    traffic_routing_method='Priority',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-aaaa', ttl=record.ttl
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one',
+                            type=external,
+                            target='1::1',
+                            priority=1,
+                            endpoint_status=EndpointStatus.DISABLED,
+                            always_serve=AlwaysServe.DISABLED,
+                        ),
+                        Endpoint(
+                            name='--default--',
+                            type=external,
+                            target='f::f',
+                            priority=2,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                )
+            ],
+        )
+
+    def test_always_serve_enabled(self):
+        record = Record.new(
+            zone_public,
+            'foo',
+            data={
+                'type': 'AAAA',
+                'ttl': 60,
+                'values': ['1::1'],
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': '1::1', 'status': 'up'}]}
+                    },
+                    'rules': [{'pool': 'one'}],
+                },
+            },
+        )
+
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        self._validate_dynamic(
+            record,
+            [
+                Profile(
+                    name='foo--unit--tests-AAAA',
+                    traffic_routing_method='Geographic',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-aaaa', ttl=record.ttl
+                    ),
+                    monitor_config=_get_monitor(record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--default--',
+                            type=external,
+                            target='1::1',
+                            weight=1,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                            geo_mapping=['WORLD'],
+                        )
+                    ],
+                )
+            ],
+        )
 
     def test_sync_traffic_managers(self):
         provider, zone, record = self._get_dynamic_package()
@@ -3086,7 +3357,7 @@ class TestAzureDnsProvider(TestCase):
                         'one': {
                             'values': [
                                 {'value': '8.8.8.8'},
-                                {'value': '1.1.1.1'},
+                                {'value': '1.1.1.1', 'status': 'up'},
                             ]
                         }
                     },
@@ -3094,8 +3365,38 @@ class TestAzureDnsProvider(TestCase):
                 },
             },
         )
-        num_tms = len(provider._generate_traffic_managers(dynamic_record))
-        self.assertEqual(num_tms, 1)
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        self._validate_dynamic(
+            dynamic_record,
+            [
+                Profile(
+                    name='foo--unit--tests-A',
+                    traffic_routing_method='Weighted',
+                    dns_config=DnsConfig(
+                        relative_name='foo--unit--tests-a',
+                        ttl=dynamic_record.ttl,
+                    ),
+                    monitor_config=_get_monitor(dynamic_record),
+                    endpoints=[
+                        Endpoint(
+                            name='one--8.8.8.8',
+                            type=external,
+                            target='8.8.8.8',
+                            weight=1,
+                        ),
+                        Endpoint(
+                            name='one--1.1.1.1--default--',
+                            type=external,
+                            target='1.1.1.1',
+                            weight=1,
+                            endpoint_status=EndpointStatus.ENABLED,
+                            always_serve=AlwaysServe.ENABLED,
+                        ),
+                    ],
+                )
+            ],
+        )
+
         change = Update(simple_record, dynamic_record)
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
@@ -3103,7 +3404,7 @@ class TestAzureDnsProvider(TestCase):
             provider.dns_client.record_sets.create_or_update,
             provider._tm_client.profiles.delete,
         )
-        self.assertEqual(tm_sync.call_count, num_tms)
+        self.assertEqual(tm_sync.call_count, 1)
         dns_update.assert_called_once()
         tm_delete.assert_not_called()
 
