@@ -507,7 +507,7 @@ def _profile_is_match(have, desired):
     return True
 
 
-def _azure_ep_alwaysserve_to_octo_status(endpoint_status, always_serve):
+def _endpoint_flags_to_value_status(endpoint_status, always_serve):
     """Convert between azure endpoint's endpoint_status and always_serve flags and octo's pool status flag"""
     if endpoint_status is None:
         endpoint_status = EndpointStatus.ENABLED
@@ -515,7 +515,7 @@ def _azure_ep_alwaysserve_to_octo_status(endpoint_status, always_serve):
         always_serve = AlwaysServe.DISABLED
 
     if endpoint_status == EndpointStatus.DISABLED:
-        # It doesn't matter what always_serve is if ep is disabled
+        # It doesn't matter what always_serve is if endpoint is disabled
         return 'down'
     elif always_serve == AlwaysServe.ENABLED:
         return 'up'
@@ -523,14 +523,14 @@ def _azure_ep_alwaysserve_to_octo_status(endpoint_status, always_serve):
         return 'obey'
 
 
-def _octo_status_to_azure_ep_alwaysserve(octo_status):
+def _value_status_to_endpoint_flags(value_status):
     """Convert between octo's pool status flag and azure endpoint's endpoint_status and always_serve flags"""
     status_map = {
         'down': (EndpointStatus.DISABLED, AlwaysServe.DISABLED),
         'up': (EndpointStatus.ENABLED, AlwaysServe.ENABLED),
         'obey': (EndpointStatus.ENABLED, AlwaysServe.DISABLED),
     }
-    return status_map[octo_status]
+    return status_map[value_status]
 
 
 class AzureBaseProvider(BaseProvider):
@@ -1108,7 +1108,7 @@ class AzureProvider(AzureBaseProvider):
                 defaults.add(val)
                 ep_name = ep_name[: -len('--default--')]
 
-            status = _azure_ep_alwaysserve_to_octo_status(
+            status = _endpoint_flags_to_value_status(
                 pool_ep.endpoint_status, pool_ep.always_serve
             )
 
@@ -1384,7 +1384,7 @@ class AzureProvider(AzureBaseProvider):
             ep_name = f'{pool_name}--{target}'
             # Endpoint names cannot have colons, drop them from IPv6 addresses
             ep_name = ep_name.replace(':', '-')
-            ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
+            ep_status, always_serve = _value_status_to_endpoint_flags(
                 val['status']
             )
             if val['value'] in defaults and val['status'] == 'up':
@@ -1436,7 +1436,7 @@ class AzureProvider(AzureBaseProvider):
             # value as an external endpoint to fallback rule profile
             value = pool_values[0]
             ep_name = pool_name
-            ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve(
+            ep_status, always_serve = _value_status_to_endpoint_flags(
                 value['status']
             )
             target = value['value']
@@ -1534,7 +1534,7 @@ class AzureProvider(AzureBaseProvider):
             if record._type == 'CNAME':
                 default = default[:-1]
             # default should always be up
-            ep_status, always_serve = _octo_status_to_azure_ep_alwaysserve('up')
+            ep_status, always_serve = _value_status_to_endpoint_flags('up')
             endpoints.append(
                 Endpoint(
                     name='--default--',
