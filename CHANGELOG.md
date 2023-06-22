@@ -1,6 +1,7 @@
 ## v0.0.5 - 202?-??-?? - ???
 
 * Add support for [Azure Private DNS](https://learn.microsoft.com/en-us/azure/dns/private-dns-overview)
+* Add support for `status=up` pool value flag (aka [Always Serve](https://azure.microsoft.com/en-us/updates/alwaysserve/))
 
 ## v0.0.4 - 2022-11-30 - Support the root
 
