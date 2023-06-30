@@ -553,6 +553,7 @@ class AzureBaseProvider(BaseProvider):
         client_status_retries=3,
         authority="https://login.microsoftonline.com",
         base_url="https://management.azure.com",
+        top=100,
         *args,
         **kwargs,
     ):
@@ -561,7 +562,7 @@ class AzureBaseProvider(BaseProvider):
             '__init__: id=%s, client_id=%s, '
             'key=***, directory_id:%s, authority:%s, '
             'base_url:%s, client_total_retries:%d, '
-            'client_status_retries:%d',
+            'client_status_retries:%d, top:%d',
             id,
             client_id,
             directory_id,
@@ -569,6 +570,7 @@ class AzureBaseProvider(BaseProvider):
             base_url,
             client_total_retries,
             client_status_retries,
+            top,
         )
         super().__init__(id, *args, **kwargs)
 
@@ -582,6 +584,7 @@ class AzureBaseProvider(BaseProvider):
         self.__client_credential = None
 
         self._dns_client = None
+        self._dns_client_top = top
 
         self._resource_group = resource_group
         self._traffic_managers = dict()
@@ -690,7 +693,8 @@ class AzureBaseProvider(BaseProvider):
         if self._check_zone(zone_name):
             exists = True
             rg = self._resource_group
-            for azrecord in self._zone_records(rg, zone_name):
+            top = self._dns_client_top
+            for azrecord in self._zone_records(rg, zone_name, top):
                 typ = _parse_azure_type(azrecord.type)
                 if typ not in self.SUPPORTS:
                     continue
@@ -859,6 +863,11 @@ class AzureProvider(AzureBaseProvider):
         # Resource Group name:
         resource_group:
         # All are required to authenticate.
+        #
+        # The maximum number of record sets to return per page.
+        # https://learn.microsoft.com/en-us/rest/api/dns/record-sets/list-by-dns-zone
+        # Top default 100
+        top: 100
 
         Example config file with variables:
             "
@@ -874,6 +883,7 @@ class AzureProvider(AzureBaseProvider):
                 directory_id: env/AZURE_DIRECTORY_ID
                 sub_id: env/AZURE_SUBSCRIPTION_ID
                 resource_group: 'TestResource1'
+                top: 500
 
             zones:
               example.com.:
@@ -925,9 +935,9 @@ class AzureProvider(AzureBaseProvider):
         create_zone = self.dns_client.zones.create_or_update
         return create_zone(self._resource_group, name, Zone(location='global'))
 
-    def _zone_records(self, resource_group, name):
+    def _zone_records(self, resource_group, name, top):
         return self.dns_client.record_sets.list_by_dns_zone(
-            resource_group, name
+            resource_group, name, top
         )
 
     def _populate_traffic_managers(self):
@@ -1821,6 +1831,11 @@ class AzurePrivateProvider(AzureBaseProvider):
         # Resource Group name:
         resource_group:
         # All are required to authenticate.
+        #
+        # The maximum number of record sets to return per page.
+        # https://learn.microsoft.com/en-us/rest/api/dns/record-sets/list-by-dns-zone
+        # Top default 100
+        top: 100
 
         Example config file with variables:
             "
@@ -1836,6 +1851,7 @@ class AzurePrivateProvider(AzureBaseProvider):
                 directory_id: env/AZURE_DIRECTORY_ID
                 sub_id: env/AZURE_SUBSCRIPTION_ID
                 resource_group: 'TestResource1'
+                top: 500
 
             zones:
               example.com.:
@@ -1878,8 +1894,8 @@ class AzurePrivateProvider(AzureBaseProvider):
             self._resource_group, name, PrivateZone(location='global')
         )
 
-    def _zone_records(self, resource_group, name):
-        return self.dns_client.record_sets.list(resource_group, name)
+    def _zone_records(self, resource_group, name, top):
+        return self.dns_client.record_sets.list(resource_group, name, top)
 
     def _apply_Create(self, change):
         '''A record from change must be created.
