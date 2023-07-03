@@ -925,6 +925,7 @@ class TestAzureDnsProvider(TestCase):
             'mock_directory',
             'mock_sub',
             'mock_rg',
+            'mock_top',
             strict_supports=False,
         )
 

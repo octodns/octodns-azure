@@ -57,6 +57,10 @@ providers:
     #client_total_retries: 10
     # status_retries default 3
     #client_status_retries: 3
+    # The maximum number of record sets to return per page.
+    # https://learn.microsoft.com/en-us/rest/api/dns/record-sets/list-by-dns-zone
+    # Top default 100
+    #top: 100
 ```
 
 The first four variables above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.
