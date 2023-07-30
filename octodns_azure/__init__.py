@@ -659,6 +659,9 @@ class AzureBaseProvider(BaseProvider):
             # Else return nothing (aka false)
             return
 
+    def list_zones(self):
+        return sorted([f'{z}.' for z in self._azure_zones])
+
     def populate(self, zone, target=False, lenient=False):
         '''Required function of manager.py to collect records from zone.
 
