@@ -1310,6 +1310,24 @@ class TestAzureDnsProvider(TestCase):
         # This should be returning two zones since two zones are the same
         self.assertEqual(len(provider._azure_zones), 2)
 
+    def test_list_zones(self):
+        provider = self._get_provider()
+
+        zone_list = provider.dns_client.zones.list_by_resource_group
+        zone_1 = AzureZone(location='global')
+        # This is far from ideal but the
+        # zone constructor doesn't let me set it on creation
+        zone_1.name = "other.thing"
+        zone_2 = AzureZone(location='global')
+        # This is far from ideal but the
+        # zone constructor doesn't let me set it on creation
+        zone_2.name = "alpha.com"
+        zone_list.return_value = [zone_1, zone_2, zone_1]
+
+        self.assertEqual(
+            [f'{zone_2.name}.', f'{zone_1.name}.'], provider.list_zones()
+        )
+
     def test_bad_zone_response(self):
         provider = self._get_provider()
 
