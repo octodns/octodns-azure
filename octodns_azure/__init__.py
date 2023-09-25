@@ -3,7 +3,9 @@
 #
 
 from collections import defaultdict
+from copy import deepcopy
 from functools import reduce
+from ipaddress import ip_address, ip_network
 from logging import getLogger
 
 from azure.core.pipeline.policies import RetryPolicy
@@ -28,6 +30,7 @@ from azure.mgmt.trafficmanager.models import (
     AlwaysServe,
     DnsConfig,
     Endpoint,
+    EndpointPropertiesSubnetsItem,
     EndpointStatus,
     MonitorConfig,
     MonitorConfigCustomHeadersItem,
@@ -320,6 +323,11 @@ def _root_traffic_manager_name(record):
     return name
 
 
+def _geo_traffic_manager_name(record):
+    prefix = _root_traffic_manager_name(record)
+    return f'{prefix}-geo'
+
+
 def _rule_traffic_manager_name(pool, record):
     prefix = _root_traffic_manager_name(record)
     return f'{prefix}-rule-{pool}'
@@ -397,7 +405,7 @@ def _profile_is_match(have, desired):
     def false(have, desired, name=None):
         prefix = f'profile={name}' if name else ''
         attr = have.__class__.__name__
-        log('%s have.%s = %s', prefix, attr, have)
+        log('%s have.%s    = %s', prefix, attr, have)
         log('%s desired.%s = %s', prefix, attr, desired)
         return False
 
@@ -475,6 +483,17 @@ def _profile_is_match(have, desired):
             if have_geos != desired_geos:
                 return false(have_endpoint, desired_endpoint, have.name)
 
+        # compare subnets
+        if method == 'Subnet':
+            have_subnets = sorted(
+                _parse_azure_subnets(have_endpoint.subnets or [])
+            )
+            desired_subnets = sorted(
+                _parse_azure_subnets(desired_endpoint.subnets or [])
+            )
+            if have_subnets != desired_subnets:
+                return false(have_endpoint, desired_endpoint, have.name)
+
         # compare priorities
         if (
             method == 'Priority'
@@ -531,6 +550,29 @@ def _value_status_to_endpoint_flags(value_status):
         'obey': (EndpointStatus.ENABLED, AlwaysServe.DISABLED),
     }
     return status_map[value_status]
+
+
+def _format_azure_subnets(subnets):
+    az_subnets = []
+    for subnet in subnets:
+        network = ip_network(subnet)
+        az_subnets.append(
+            EndpointPropertiesSubnetsItem(
+                first=network[0], scope=network.prefixlen
+            )
+        )
+
+    return az_subnets
+
+
+def _parse_azure_subnets(az_subnets):
+    subnets = []
+    for az_subnet in az_subnets:
+        prefix = ip_address(az_subnet.first)
+        prefix_len = az_subnet.scope
+        subnets.append(f'{prefix}/{prefix_len}')
+
+    return subnets
 
 
 class AzureBaseProvider(BaseProvider):
@@ -905,6 +947,7 @@ class AzureProvider(AzureBaseProvider):
 
     SUPPORTS_ROOT_NS = True
     SUPPORTS_DYNAMIC = True
+    SUPPORTS_DYNAMIC_SUBNETS = True
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -1031,8 +1074,8 @@ class AzureProvider(AzureBaseProvider):
 
         return super()._data_for_CNAME(azrecord)
 
-    def _get_geo_endpoints(self, root_profile):
-        if root_profile.traffic_routing_method != 'Geographic':
+    def _get_root_endpoints(self, root_profile):
+        if root_profile.traffic_routing_method not in ['Subnet', 'Geographic']:
             # This record does not use geo fencing, so we skip the Geographic
             # profile hop; let's pretend to be a geo-profile's only endpoint
             geo_ep = Endpoint(
@@ -1044,20 +1087,20 @@ class AzureProvider(AzureBaseProvider):
 
         return root_profile.endpoints
 
-    def _get_rule_endpoints(self, geo_ep):
+    def _get_rule_endpoints(self, parent_ep):
         if (
-            geo_ep.target_resource_id
-            and geo_ep.target_resource.traffic_routing_method == 'Priority'
+            parent_ep.target_resource_id
+            and parent_ep.target_resource.traffic_routing_method == 'Priority'
         ):
             return sorted(
-                geo_ep.target_resource.endpoints, key=lambda e: e.priority
+                parent_ep.target_resource.endpoints, key=lambda e: e.priority
             )
         else:
             # this geo directly points to a pool containing the default
             # so we skip the Priority profile hop and directly use an
             # external endpoint or Weighted profile
             # let's pretend to be a Priority profile's only endpoint
-            return [geo_ep]
+            return [parent_ep]
 
     def _get_pool_endpoints(self, rule_ep):
         if rule_ep.target_resource_id:
@@ -1131,8 +1174,8 @@ class AzureProvider(AzureBaseProvider):
 
         return values
 
-    def _populate_pools(self, geo_ep, typ, defaults, pools):
-        rule_endpoints = self._get_rule_endpoints(geo_ep)
+    def _populate_pools(self, parent_ep, typ, defaults, pools):
+        rule_endpoints = self._get_rule_endpoints(parent_ep)
         rule_pool = None
         pool = None
         for rule_ep in rule_endpoints:
@@ -1176,9 +1219,29 @@ class AzureProvider(AzureBaseProvider):
         # top level profile
         root_profile = self._get_tm_profile_by_id(azrecord.target_resource.id)
 
+        rule_map = {}
+        if root_profile.traffic_routing_method == 'Subnet':
+            # insert subnet rules and their pools, save pools to the map
+            # for adding geos to them later
+            for subnet_ep in root_profile.endpoints:
+                subnets = subnet_ep.subnets
+                if subnets:
+                    rule = {
+                        'subnets': _parse_azure_subnets(subnets),
+                        'pool': self._populate_pools(
+                            subnet_ep, typ, defaults, pools
+                        ),
+                    }
+                    rules.append(rule)
+                    rule_map[subnet_ep.name] = rule
+                elif subnet_ep.target_resource_id:
+                    # catch-all subnet endpoint should become the root profile
+                    # for further processing
+                    root_profile = subnet_ep.target_resource
+
         # construct rules and, in turn, pools
-        for geo_ep in self._get_geo_endpoints(root_profile):
-            rule = {}
+        for geo_ep in self._get_root_endpoints(root_profile):
+            rule = rule_map.get(geo_ep.name, {})
 
             # resolve list of regions
             geo_map = list(geo_ep.geo_mapping or [])
@@ -1186,6 +1249,10 @@ class AzureProvider(AzureBaseProvider):
                 rule['geos'] = self._populate_geos(
                     geo_map, root_profile.name, azrecord.fqdn
                 )
+
+            if 'pool' in rule:
+                # this rule's pool is already populated above by Subnet profile
+                continue
 
             # build pool fallback chain from second level priority profile
             rule['pool'] = self._populate_pools(geo_ep, typ, defaults, pools)
@@ -1330,6 +1397,8 @@ class AzureProvider(AzureBaseProvider):
             name = _pool_traffic_manager_name(label, record)
         elif routing == 'Priority' and label:
             name = _rule_traffic_manager_name(label, record)
+        elif routing == 'Geographic':
+            name = _geo_traffic_manager_name(record)
 
         # set appropriate endpoint types
         endpoint_type_prefix = 'Microsoft.Network/trafficManagerProfiles/'
@@ -1344,6 +1413,9 @@ class AzureProvider(AzureBaseProvider):
                     f'{name}, needs to have either target '
                     'or target_resource_id'
                 )
+
+            if ep.subnets:
+                ep.subnets = _format_azure_subnets(ep.subnets)
 
         # build and return
         return Profile(
@@ -1545,7 +1617,7 @@ class AzureProvider(AzureBaseProvider):
             endpoints, rule_name, record, traffic_managers
         )
 
-    def _make_geo_rules(self, record):
+    def _make_geo_rules(self, record, traffic_managers):
         rules = record.dynamic.rules
 
         # a pool can be re-used only with a world pool, record the pool
@@ -1553,11 +1625,11 @@ class AzureProvider(AzureBaseProvider):
         # can't have multiple endpoints with the same target in ATM
         world_pool = None
         for rule in rules:
-            if not rule.data.get('geos', []):
+            if not rule.data.get('geos', []) and not rule.data.get('subnets'):
                 world_pool = rule.data['pool']
 
-        traffic_managers = []
         geo_endpoints = []
+        subnet_endpoints = []
         pool_profiles = {}
         world_seen = False
 
@@ -1565,6 +1637,7 @@ class AzureProvider(AzureBaseProvider):
             rule = rule.data
             pool_name = rule['pool']
             rule_geos = rule.get('geos', [])
+            subnets = rule.get('subnets')
 
             if pool_name == world_pool and world_seen:
                 # this world pool is already mentioned in another geo rule
@@ -1572,35 +1645,76 @@ class AzureProvider(AzureBaseProvider):
 
             # Prepare the list of Traffic manager geos
             geos = self._make_azure_geos(rule_geos)
-            if not geos or pool_name == world_pool:
+            if not (geos or subnets) or pool_name == world_pool:
+                # pool is either a world pool or maps geos to the world pool
                 geos.append('WORLD')
                 world_seen = True
 
-            geo_endpoint = self._make_rule(
+            endpoint = self._make_rule(
                 pool_name, pool_profiles, record, traffic_managers
             )
-            geo_endpoint.geo_mapping = geos
 
-            geo_endpoints.append(geo_endpoint)
+            if subnets:
+                # copy the endpoint for use in Subnet profile
+                subnet_endpoint = deepcopy(endpoint)
+                subnet_endpoint.subnets = subnets
+                subnet_endpoints.append(subnet_endpoint)
 
-        return geo_endpoints, traffic_managers
+            if geos:
+                # empty geos implies subnet-only rule, catch-all rule would have geos=['WORLD']
+                # add geo endpoint only if we're not a subnet-only rule
+                endpoint.geo_mapping = geos
+                geo_endpoints.append(endpoint)
+
+        return geo_endpoints, subnet_endpoints
 
     def _generate_traffic_managers(self, record):
-        geo_endpoints, traffic_managers = self._make_geo_rules(record)
+        traffic_managers = []
+        geo_endpoints, subnet_endpoints = self._make_geo_rules(
+            record, traffic_managers
+        )
 
-        if (
-            len(geo_endpoints) == 1
-            and geo_endpoints[0].geo_mapping == ['WORLD']
-            and geo_endpoints[0].target_resource_id
-        ):
-            # Single WORLD rule does not require a Geographic profile, use the
-            # target profile (which is at the end) as the root profile
-            self._convert_tm_to_root(traffic_managers[-1], record)
-        else:
-            geo_profile = self._generate_tm_profile(
-                'Geographic', geo_endpoints, record
+        world_only_geo = len(geo_endpoints) == 1 and geo_endpoints[
+            0
+        ].geo_mapping == ['WORLD']
+
+        if subnet_endpoints:
+            # subnet matching in action
+            if world_only_geo:
+                # single geo rule does not need a Geographic profile
+                # move the only geo endpoint to the parent Subnet profile
+                subnet_endpoint = geo_endpoints[0]
+                subnet_endpoint.geo_mapping = None
+                subnet_endpoints.append(subnet_endpoint)
+            else:
+                # geo matching also exists, append a nested endpoint pointing to the
+                # Geographic profile for the parent Subnet profile
+                geo_profile = self._generate_tm_profile(
+                    'Geographic', geo_endpoints, record
+                )
+                traffic_managers.append(geo_profile)
+                subnet_endpoints.append(
+                    Endpoint(name='--geo--', target_resource_id=geo_profile.id)
+                )
+
+            # create Subnet profile which will be the root profile
+            subnet_profile = self._generate_tm_profile(
+                'Subnet', subnet_endpoints, record
             )
-            traffic_managers.append(geo_profile)
+            traffic_managers.append(subnet_profile)
+        else:
+            # no subnet matching
+            if world_only_geo and geo_endpoints[0].target_resource_id:
+                # single geo rule does not need a Geographic profile
+                # use the nested profile (which is at the end of the list) as the root
+                self._convert_tm_to_root(traffic_managers[-1], record)
+            else:
+                # geo matching exists, create the Geographic profile and make it root
+                geo_profile = self._generate_tm_profile(
+                    'Geographic', geo_endpoints, record
+                )
+                self._convert_tm_to_root(geo_profile, record)
+                traffic_managers.append(geo_profile)
 
         return traffic_managers
 
