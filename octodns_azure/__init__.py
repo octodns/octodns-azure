@@ -1418,7 +1418,7 @@ class AzureProvider(AzureBaseProvider):
         )
 
     def _make_pool(
-        self, pool, priority, pool_profiles, record, defaults, traffic_managers
+        self, pool, pool_profiles, record, defaults, traffic_managers
     ):
         pool_name = pool._id
         pool_values = pool.data['values']
@@ -1439,11 +1439,7 @@ class AzureProvider(AzureBaseProvider):
                 pool_profiles[pool_name] = pool_profile
 
             # append pool to endpoint list of fallback rule profile
-            return Endpoint(
-                name=pool_name,
-                target_resource_id=pool_profile.id,
-                priority=priority,
-            )
+            return Endpoint(name=pool_name, target_resource_id=pool_profile.id)
         else:
             # Skip Weighted profile hop for single-value pool; append its
             # value as an external endpoint to fallback rule profile
@@ -1462,13 +1458,12 @@ class AzureProvider(AzureBaseProvider):
             return Endpoint(
                 name=ep_name,
                 target=target,
-                priority=priority,
                 endpoint_status=ep_status,
                 always_serve=always_serve,
             )
 
     def _make_rule_profile(
-        self, rule_endpoints, rule_name, record, geos, traffic_managers
+        self, rule_endpoints, rule_name, record, traffic_managers
     ):
         if len(rule_endpoints) > 1:
             # create rule profile with fallback chain
@@ -1478,11 +1473,7 @@ class AzureProvider(AzureBaseProvider):
             traffic_managers.append(rule_profile)
 
             # append rule profile to top-level geo profile
-            return Endpoint(
-                name=rule_name,
-                target_resource_id=rule_profile.id,
-                geo_mapping=geos,
-            )
+            return Endpoint(name=rule_name, target_resource_id=rule_profile.id)
         else:
             # Priority profile has only one endpoint; skip the hop and append
             # its only endpoint to the top-level profile
@@ -1492,21 +1483,17 @@ class AzureProvider(AzureBaseProvider):
                 return Endpoint(
                     name=rule_ep.name,
                     target_resource_id=rule_ep.target_resource_id,
-                    geo_mapping=geos,
                 )
             else:
                 # just add the value of single-value pool
                 return Endpoint(
                     name=rule_ep.name,
                     target=rule_ep.target,
-                    geo_mapping=geos,
                     endpoint_status=rule_ep.endpoint_status,
                     always_serve=rule_ep.always_serve,
                 )
 
-    def _make_rule(
-        self, pool_name, pool_profiles, record, geos, traffic_managers
-    ):
+    def _make_rule(self, pool_name, pool_profiles, record, traffic_managers):
         endpoints = []
         rule_name = pool_name
 
@@ -1523,13 +1510,9 @@ class AzureProvider(AzureBaseProvider):
             pool = record.dynamic.pools[pool_name]
 
             rule_ep = self._make_pool(
-                pool,
-                priority,
-                pool_profiles,
-                record,
-                defaults,
-                traffic_managers,
+                pool, pool_profiles, record, defaults, traffic_managers
             )
+            rule_ep.priority = priority
             endpoints.append(rule_ep)
 
             if not default_seen and any(
@@ -1559,7 +1542,7 @@ class AzureProvider(AzureBaseProvider):
             )
 
         return self._make_rule_profile(
-            endpoints, rule_name, record, geos, traffic_managers
+            endpoints, rule_name, record, traffic_managers
         )
 
     def _make_geo_rules(self, record):
@@ -1593,11 +1576,12 @@ class AzureProvider(AzureBaseProvider):
                 geos.append('WORLD')
                 world_seen = True
 
-            geo_endpoints.append(
-                self._make_rule(
-                    pool_name, pool_profiles, record, geos, traffic_managers
-                )
+            geo_endpoint = self._make_rule(
+                pool_name, pool_profiles, record, traffic_managers
             )
+            geo_endpoint.geo_mapping = geos
+
+            geo_endpoints.append(geo_endpoint)
 
         return geo_endpoints, traffic_managers
 
