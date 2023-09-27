@@ -42,6 +42,7 @@ from octodns_azure import (
     AzureProvider,
     _AzureRecord,
     _check_endswith_dot,
+    _format_azure_subnets,
     _get_monitor,
     _parse_azure_type,
     _profile_is_match,
@@ -827,6 +828,7 @@ class Test_ProfileIsMatch(TestCase):
             target='target.unit.tests',
             target_id='resource/id',
             geos=['GEO-AF'],
+            subnets=['1.1.1.1'],
             weight=1,
             priority=1,
         ):
@@ -852,6 +854,7 @@ class Test_ProfileIsMatch(TestCase):
                         target=target,
                         target_resource_id=target_id,
                         geo_mapping=geos,
+                        subnets=_format_azure_subnets(subnets),
                         weight=weight,
                         priority=priority,
                     )
@@ -884,6 +887,12 @@ class Test_ProfileIsMatch(TestCase):
             is_match(
                 profile(endpoint_type='profile/externalEndpoints'),
                 profile(endpoint_type='profile/externalEndpoints', geos=['IN']),
+            )
+        )
+        self.assertFalse(
+            is_match(
+                profile(method='Subnet'),
+                profile(method='Subnet', subnets=['2.2.2.2']),
             )
         )
         self.assertFalse(
@@ -925,7 +934,6 @@ class TestAzureDnsProvider(TestCase):
             'mock_directory',
             'mock_sub',
             'mock_rg',
-            'mock_top',
             strict_supports=False,
         )
 
@@ -2991,6 +2999,523 @@ class TestAzureDnsProvider(TestCase):
                 )
             ],
         )
+
+    def test_dynamic_subnets_and_geos_combined(self):
+        record = Record.new(
+            zone_public,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'def.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': 'one.unit.tests.'}]},
+                        'def': {
+                            'values': [
+                                {'value': 'def.unit.tests.', 'status': 'up'}
+                            ]
+                        },
+                    },
+                    'rules': [
+                        {
+                            'subnets': ['10.1.0.0/16'],
+                            'geos': ['AF'],
+                            'pool': 'one',
+                        },
+                        {'pool': 'def'},
+                    ],
+                },
+            },
+        )
+
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
+        profiles = [
+            Profile(
+                name='foo--unit--tests-rule-one',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-one', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=external,
+                        target='one.unit.tests',
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-geo',
+                traffic_routing_method='Geographic',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-geo', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        geo_mapping=['GEO-AF'],
+                    ),
+                    Endpoint(
+                        name='def--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        geo_mapping=['WORLD'],
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests',
+                traffic_routing_method='Subnet',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        subnets=_format_azure_subnets(['10.1.0.0/16']),
+                    ),
+                    Endpoint(
+                        name='--geo--',
+                        type=nested,
+                        target_resource_id=name_to_id('foo--unit--tests-geo'),
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record, profiles)
+
+    def test_dynamic_subnets_and_geos_separate(self):
+        record = Record.new(
+            zone_public,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'def.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': 'one.unit.tests.'}]},
+                        'two': {'values': [{'value': 'two.unit.tests.'}]},
+                        'def': {
+                            'values': [
+                                {'value': 'def.unit.tests.', 'status': 'up'}
+                            ]
+                        },
+                    },
+                    'rules': [
+                        {'subnets': ['10.1.0.0/16'], 'pool': 'one'},
+                        {'geos': ['AF'], 'pool': 'two'},
+                        {'pool': 'def'},
+                    ],
+                },
+            },
+        )
+
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
+        profiles = [
+            Profile(
+                name='foo--unit--tests-rule-one',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-one', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=external,
+                        target='one.unit.tests',
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-rule-two',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-two', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='two',
+                        type=external,
+                        target='two.unit.tests',
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-geo',
+                traffic_routing_method='Geographic',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-geo', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='two',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-two'
+                        ),
+                        geo_mapping=['GEO-AF'],
+                    ),
+                    Endpoint(
+                        name='def--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        geo_mapping=['WORLD'],
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests',
+                traffic_routing_method='Subnet',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        subnets=_format_azure_subnets(['10.1.0.0/16']),
+                    ),
+                    Endpoint(
+                        name='--geo--',
+                        type=nested,
+                        target_resource_id=name_to_id('foo--unit--tests-geo'),
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record, profiles)
+
+    def test_dynamic_all_profiles(self):
+        record = Record.new(
+            zone_public,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'def.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': 'one.unit.tests.'}]},
+                        'two': {'values': [{'value': 'two.unit.tests.'}]},
+                        'glb': {
+                            'values': [
+                                {'value': 'glb1.unit.tests.'},
+                                {'value': 'glb2.unit.tests.'},
+                            ]
+                        },
+                    },
+                    'rules': [
+                        {
+                            'subnets': ['10.1.0.0/16'],
+                            'geos': ['EU'],
+                            'pool': 'one',
+                        },
+                        {'geos': ['AF'], 'pool': 'two'},
+                        {'pool': 'glb'},
+                    ],
+                },
+            },
+        )
+
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
+        profiles = [
+            Profile(
+                name='foo--unit--tests-rule-one',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-one', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=external,
+                        target='one.unit.tests',
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-rule-two',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-two', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='two',
+                        type=external,
+                        target='two.unit.tests',
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-pool-glb',
+                traffic_routing_method='Weighted',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-pool-glb', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='glb--glb1.unit.tests',
+                        type=external,
+                        target='glb1.unit.tests',
+                        weight=1,
+                    ),
+                    Endpoint(
+                        name='glb--glb2.unit.tests',
+                        type=external,
+                        target='glb2.unit.tests',
+                        weight=1,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-rule-glb',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-glb', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='glb',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-pool-glb'
+                        ),
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests-geo',
+                traffic_routing_method='Geographic',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-geo', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        geo_mapping=['GEO-EU'],
+                    ),
+                    Endpoint(
+                        name='two',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-two'
+                        ),
+                        geo_mapping=['GEO-AF'],
+                    ),
+                    Endpoint(
+                        name='glb',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-glb'
+                        ),
+                        geo_mapping=['WORLD'],
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests',
+                traffic_routing_method='Subnet',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        subnets=_format_azure_subnets(['10.1.0.0/16']),
+                    ),
+                    Endpoint(
+                        name='--geo--',
+                        type=nested,
+                        target_resource_id=name_to_id('foo--unit--tests-geo'),
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record, profiles)
+
+    def test_dynamic_subnets_only(self):
+        record = Record.new(
+            zone_public,
+            'foo',
+            data={
+                'type': 'CNAME',
+                'ttl': 60,
+                'value': 'def.unit.tests.',
+                'dynamic': {
+                    'pools': {
+                        'one': {'values': [{'value': 'one.unit.tests.'}]},
+                        'def': {
+                            'values': [
+                                {'value': 'def.unit.tests.', 'status': 'up'}
+                            ]
+                        },
+                    },
+                    'rules': [
+                        {'subnets': ['10.1.0.0/16'], 'pool': 'one'},
+                        {'pool': 'def'},
+                    ],
+                },
+            },
+        )
+
+        external = 'Microsoft.Network/trafficManagerProfiles/externalEndpoints'
+        nested = 'Microsoft.Network/trafficManagerProfiles/nestedEndpoints'
+        name_to_id = self._get_provider()._profile_name_to_id
+        monitor = _get_monitor(record)
+        profiles = [
+            Profile(
+                name='foo--unit--tests-rule-one',
+                traffic_routing_method='Priority',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests-rule-one', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=external,
+                        target='one.unit.tests',
+                        priority=1,
+                    ),
+                    Endpoint(
+                        name='--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        priority=2,
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+            Profile(
+                name='foo--unit--tests',
+                traffic_routing_method='Subnet',
+                dns_config=DnsConfig(
+                    relative_name='foo--unit--tests', ttl=record.ttl
+                ),
+                monitor_config=monitor,
+                endpoints=[
+                    Endpoint(
+                        name='one',
+                        type=nested,
+                        target_resource_id=name_to_id(
+                            'foo--unit--tests-rule-one'
+                        ),
+                        subnets=_format_azure_subnets(['10.1.0.0/16']),
+                    ),
+                    Endpoint(
+                        name='def--default--',
+                        type=external,
+                        target='def.unit.tests',
+                        endpoint_status=EndpointStatus.ENABLED,
+                        always_serve=AlwaysServe.ENABLED,
+                    ),
+                ],
+            ),
+        ]
+        self._validate_dynamic(record, profiles)
 
     def test_sync_traffic_managers(self):
         provider, zone, record = self._get_dynamic_package()
