@@ -1,4 +1,4 @@
-## v0.0.6 - 2023-??-?? - ???
+## v0.0.6 - 2023-09-28 - Dynamic zones and subnet targeting
 
 * Adds Provider.list_zones to enable new dynamic zone config functionality
 * Newly added support for subnet targeting using the [Subnet traffic-routing method](https://learn.microsoft.com/en-us/azure/traffic-manager/traffic-manager-routing-methods#subnet)
