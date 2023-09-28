@@ -62,7 +62,7 @@ setup(
         'azure-mgmt-privatedns>=1.0.0,<1.1.0',
         'azure-mgmt-trafficmanager>=1.1.0,<1.2.0',
         'msrestazure>=0.6.4,<0.7.0',
-        'octodns>=0.9.16',
+        'octodns>=1.2.0',
     ),
     license='MIT',
     long_description=long_description,
