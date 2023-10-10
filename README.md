@@ -61,6 +61,14 @@ providers:
     # https://learn.microsoft.com/en-us/rest/api/dns/record-sets/list-by-dns-zone
     # Top default 100
     #top: 100
+    # Azure AD authentication URL
+    # defaults to: https://login.microsoftonline.com
+    # docs: https://learn.microsoft.com/en-us/python/api/azure-identity/azure.identity.clientsecretcredential?view=azure-python#parameters
+    #authority: https://management.azure.com
+    # ARM Management URL
+    # defaults to: https://management.azure.com
+    # docs: https://docs.microsoft.com/en-us/python/api/azure-mgmt-resource/azure.mgmt.resource.applicationclient?view=azure-python#parameters
+    #base_url: https://management.azure.com
 ```
 
 The first four variables above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.
