@@ -14,8 +14,7 @@ def version():
     with open('octodns_azure/__init__.py') as fh:
         for line in fh:
             if line.startswith('__version__'):
-                return line.split("'")[2]
-                break
+                return line.split("'")[1]
     raise Exception('failed to determine version number')
 
 
