@@ -1,3 +1,8 @@
+## v0.0.7 - 2023-11-14 - Maintenance release
+
+* Several improvements to the maintenance mechanisms for this package
+  like CI improvements, documentation and packaging metadata fix.
+
 ## v0.0.6 - 2023-09-28 - Dynamic zones and subnet targeting
 
 * Adds Provider.list_zones to enable new dynamic zone config functionality
