@@ -929,11 +929,59 @@ class TestAzureDnsProvider(TestCase):
         '''
         provider = AzureProvider(
             'mock_id',
-            'mock_client',
-            'mock_key',
-            'mock_directory',
             'mock_sub',
             'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            strict_supports=False,
+        )
+
+        # Fetch the client to force it to load the creds
+        provider.dns_client
+
+        # set critical functions to return properly
+        tm_list = provider._tm_client.profiles.list_by_resource_group
+        tm_list.return_value = []
+        tm_sync = provider._tm_client.profiles.create_or_update
+
+        def side_effect(rg, name, profile):
+            return Profile(
+                id=profile.id,
+                name=profile.name,
+                traffic_routing_method=profile.traffic_routing_method,
+                dns_config=profile.dns_config,
+                monitor_config=profile.monitor_config,
+                endpoints=profile.endpoints,
+            )
+
+        tm_sync.side_effect = side_effect
+
+        return provider
+
+    @patch('octodns_azure.TrafficManagerManagementClient')
+    @patch('octodns_azure.DnsManagementClient')
+    @patch('octodns_azure.ClientSecretCredential')
+    def _get_cli_provider(self, mock_css, mock_client, mock_tm_client):
+        '''Returns a mock AzureProvider object to use in testing.
+
+        :param mock_spc: placeholder
+        :type  mock_spc: str
+        :param mock_client: placeholder
+        :type  mock_client: str
+        :param mock_tm_client: placeholder
+        :type  mock_tm_client: str
+
+        :type return: AzureProvider
+        '''
+        provider = AzureProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            client_credential_method='cli',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
             strict_supports=False,
         )
 
@@ -4152,6 +4200,35 @@ class TestAzureDnsProvider(TestCase):
         # same object, no copy
         self.assertEqual(id(zone), id(ret))
 
+    def test_cli(self):
+        provider = self._get_cli_provider()
+
+        # setup traffic manager profiles
+        tm_list = provider._tm_client.profiles.list_by_resource_group
+        tm_list.return_value = self._get_tm_profiles(provider)
+
+        # setup zone with dynamic record
+        zone = Zone(name='unit.tests.', sub_zones=[])
+        record = self._get_dynamic_record(zone)
+        zone.add_record(record)
+
+        # return everything
+        return provider, zone, record
+
+    def test_no_provider(self):
+        provider = AzureProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            client_credential_method='foobar',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            strict_supports=False,
+        )
+        with self.assertRaises(AzureException):
+            _ = provider._client_credential
+
 
 class TestPrivateAzureDnsProvider(TestCase):
     @patch('octodns_azure.PrivateDnsManagementClient')
@@ -4170,11 +4247,11 @@ class TestPrivateAzureDnsProvider(TestCase):
         '''
         provider = AzurePrivateProvider(
             'mock_id',
-            'mock_client',
-            'mock_key',
-            'mock_directory',
             'mock_sub',
             'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
             strict_supports=False,
         )
 
