@@ -5,6 +5,7 @@
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
+from azure.identity import AzureCliCredential
 from azure.mgmt.dns.models import (
     AaaaRecord,
     ARecord,
@@ -929,11 +930,11 @@ class TestAzureDnsProvider(TestCase):
         '''
         provider = AzureProvider(
             'mock_id',
-            'mock_client',
-            'mock_key',
-            'mock_directory',
             'mock_sub',
             'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
             strict_supports=False,
         )
 
@@ -4152,6 +4153,35 @@ class TestAzureDnsProvider(TestCase):
         # same object, no copy
         self.assertEqual(id(zone), id(ret))
 
+    def test_cli_provider(self):
+        '''Tests that the AzureProvider is created correctly'''
+        provider = AzureProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            client_credential_method='cli',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            strict_supports=False,
+        )
+
+        self.assertIsInstance(provider._client_credential, AzureCliCredential)
+
+    def test_no_provider(self):
+        provider = AzureProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            client_credential_method='foobar',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            strict_supports=False,
+        )
+        with self.assertRaises(AzureException):
+            _ = provider._client_credential
+
 
 class TestPrivateAzureDnsProvider(TestCase):
     @patch('octodns_azure.PrivateDnsManagementClient')
@@ -4170,11 +4200,11 @@ class TestPrivateAzureDnsProvider(TestCase):
         '''
         provider = AzurePrivateProvider(
             'mock_id',
-            'mock_client',
-            'mock_key',
-            'mock_directory',
             'mock_sub',
             'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
             strict_supports=False,
         )
 

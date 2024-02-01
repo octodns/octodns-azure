@@ -9,7 +9,7 @@ from ipaddress import ip_address, ip_network
 from logging import getLogger
 
 from azure.core.pipeline.policies import RetryPolicy
-from azure.identity import ClientSecretCredential
+from azure.identity import AzureCliCredential, ClientSecretCredential
 from azure.mgmt.dns import DnsManagementClient
 from azure.mgmt.dns.models import (
     AaaaRecord,
@@ -584,14 +584,18 @@ class AzureBaseProvider(BaseProvider):
         ('A', 'AAAA', 'CAA', 'CNAME', 'MX', 'NS', 'PTR', 'SRV', 'TXT')
     )
 
+    CREDENTIAL_METHOD_CLIENT_SECRET = "client_secret"
+    CREDENTIAL_METHOD_CLI = "cli"
+
     def __init__(
         self,
         id,
-        client_id,
-        key,
-        directory_id,
         sub_id,
         resource_group,
+        directory_id=None,
+        client_id=None,
+        key=None,
+        client_credential_method=CREDENTIAL_METHOD_CLIENT_SECRET,
         client_total_retries=10,
         client_status_retries=3,
         authority="https://login.microsoftonline.com",
@@ -620,6 +624,7 @@ class AzureBaseProvider(BaseProvider):
         # Store necessary initialization params
         self._authority = authority
         self._base_url = base_url
+        self._client_method = client_credential_method
         self._client_client_id = client_id
         self._client_key = key
         self._client_directory_id = directory_id
@@ -649,13 +654,20 @@ class AzureBaseProvider(BaseProvider):
             logger_name = 'azure.core.pipeline.policies.http_logging_policy'
             logger = getLogger(logger_name)
             logger.info = logger.debug
-            self.__client_credential = ClientSecretCredential(
-                client_id=self._client_client_id,
-                client_secret=self._client_key,
-                tenant_id=self._client_directory_id,
-                authority=self._authority,
-                logger=logger,
-            )
+            if self._client_method == self.CREDENTIAL_METHOD_CLIENT_SECRET:
+                self.__client_credential = ClientSecretCredential(
+                    client_id=self._client_client_id,
+                    client_secret=self._client_key,
+                    tenant_id=self._client_directory_id,
+                    authority=self._authority,
+                    logger=logger,
+                )
+            elif self._client_method == self.CREDENTIAL_METHOD_CLI:
+                self.__client_credential = AzureCliCredential()
+            else:
+                raise AzureException(
+                    f'Unknown credential method: {self._client_method}'
+                )
         return self.__client_credential
 
     @property

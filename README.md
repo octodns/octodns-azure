@@ -36,13 +36,21 @@ octodns-azure==0.0.1
 providers:
   azure:
     class: octodns_azure.AzureProvider
-    # Current support of authentication of access to Azure services only
-    # includes using a Service Principal:
+    # Current support of authentication of access to Azure services is
+    # either using a Service Principal or deferring to an already authenticated
+    # `az` CLI instance.
     # https://docs.microsoft.com/en-us/azure/azure-resource-manager/
     #                        resource-group-create-service-principal-portal
-    # The Azure Active Directory Application ID (aka client ID):
+    # https://learn.microsoft.com/en-us/cli/azure/
+    #
+    # The authentication method, either 'client_secret' or 'cli'. This is
+    # 'client_secret' by default
+    client_credential_method: 'client_secret'
+    # The Azure Active Directory Application ID (aka client ID). Required for
+    # the 'client_secret' credential method.
     client_id: env/AZURE_APPLICATION_ID
-    # Authentication Key Value: (note this should be secret)
+    # Authentication Key Value: (note this should be secret). Required for the
+    # 'client_secret' credential method
     key: env/AZURE_AUTHENTICATION_KEY
     # Directory ID (aka tenant ID):
     directory_id: env/AZURE_DIRECTORY_ID
@@ -71,7 +79,7 @@ providers:
     #base_url: https://management.azure.com
 ```
 
-The first four variables above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.
+The variables starting with `env/` above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.
 
 For management of DNS zones on [Azure Private DNS](https://learn.microsoft.com/en-us/azure/dns/private-dns-overview), use `class: octodns_azure.AzurePrivateProvider`. Note that this provider does not support dynamic records or root NS records.
 
