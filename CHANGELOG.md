@@ -1,3 +1,7 @@
+## v0.0.8 - 2024-??-?? - 
+
+* Support for authenticating via the CLI/AzureCliCredential
+
 ## v0.0.7 - 2023-11-14 - Maintenance release
 
 * Several improvements to the maintenance mechanisms for this package
