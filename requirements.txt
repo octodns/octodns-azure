@@ -12,13 +12,13 @@ azure-mgmt-trafficmanager==1.1.0
 certifi==2024.2.2
 cffi==1.16.0
 charset-normalizer==3.3.2
-cryptography==42.0.3
+cryptography==42.0.4
 dnspython==2.6.1
 fqdn==1.5.1
 idna==3.6
 isodate==0.6.1
 msal-extensions==0.3.1
-msal==1.26.0
+msal==1.27.0
 msrest==0.7.1
 msrestazure==0.6.4
 natsort==8.4.0
