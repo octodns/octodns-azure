@@ -37,7 +37,7 @@ from azure.mgmt.trafficmanager.models import (
     Profile,
 )
 
-from octodns.provider import ProviderException
+from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
 from octodns.record import GeoCodes, Record, Update
 
@@ -1324,6 +1324,7 @@ class AzureProvider(AzureBaseProvider):
 
     def _process_desired_zone(self, desired):
         for record in desired.records:
+            protocol = record.healthcheck_protocol
             if record._type == 'NS' and record.name == '':
                 # We need to make sure the required root NS values are included
                 # in the desired state.
@@ -1336,6 +1337,10 @@ class AzureProvider(AzureBaseProvider):
                     fallback = 'adding them'
                     self.supports_warn_or_except(msg, fallback)
                     desired.add_record(record, replace=True)
+            elif protocol not in ('HTTP', 'HTTPS', 'TCP'):
+                msg = f'healthcheck protocol "{protocol}" not supported'
+                # no workable fallbacks so straight error
+                raise SupportsException(f'{self.id}: {msg}')
 
         return super()._process_desired_zone(desired)
 
