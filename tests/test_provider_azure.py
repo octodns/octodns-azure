@@ -36,6 +36,7 @@ from msrestazure.azure_exceptions import CloudError
 from octodns.provider import SupportsException
 from octodns.provider.base import Plan
 from octodns.record import Create, Delete, Record, Update
+from octodns.record.exception import ValidationError
 from octodns.zone import Zone
 
 from octodns_azure import (
@@ -2664,16 +2665,20 @@ class TestAzureDnsProvider(TestCase):
 
     def test_protocol_process_desired_zone(self):
         zone1 = Zone(zone_public.name, sub_zones=[])
-        record1 = Record.new(
-            zone1,
-            'foo',
-            data={
-                'octodns': {'healthcheck': {'protocol': 'ICMP'}},
-                'type': 'A',
-                'ttl': 42,
-                'value': '1.2.3.4',
-            },
-        )
+        try:
+            record1 = Record.new(
+                zone1,
+                'foo',
+                data={
+                    'octodns': {'healthcheck': {'protocol': 'ICMP'}},
+                    'type': 'A',
+                    'ttl': 42,
+                    'value': '1.2.3.4',
+                },
+            )
+        except ValidationError:
+            self.skipTest('ICMP healthcheck protocol not supported')
+
         zone1.add_record(record1)
         with self.assertRaises(SupportsException) as ctx:
             self._get_provider()._process_desired_zone(zone1.copy())
