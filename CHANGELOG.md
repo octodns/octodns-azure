@@ -1,6 +1,7 @@
 ## v0.0.8 - 2024-??-?? - 
 
 * Support for authenticating via the CLI/AzureCliCredential
+* Validate that healthcheck protocol is supported (HTTP, HTTPS, TCP)
 
 ## v0.0.7 - 2023-11-14 - Maintenance release
 
