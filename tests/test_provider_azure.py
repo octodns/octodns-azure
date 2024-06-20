@@ -33,6 +33,7 @@ from azure.mgmt.trafficmanager.models import (
 )
 from msrestazure.azure_exceptions import CloudError
 
+from octodns.provider import SupportsException
 from octodns.provider.base import Plan
 from octodns.record import Create, Delete, Record, Update
 from octodns.zone import Zone
@@ -2660,6 +2661,27 @@ class TestAzureDnsProvider(TestCase):
         zone2 = provider._process_desired_zone(zone1.copy())
         record2 = list(zone2.records)[0]
         self.assertTrue(record.data, record2.data)
+
+    def test_protocol_process_desired_zone(self):
+        zone1 = Zone(zone_public.name, sub_zones=[])
+        record1 = Record.new(
+            zone1,
+            'foo',
+            data={
+                'octodns': {'healthcheck': {'protocol': 'ICMP'}},
+                'type': 'A',
+                'ttl': 42,
+                'value': '1.2.3.4',
+            },
+            lenient=True,
+        )
+        zone1.add_record(record1)
+        with self.assertRaises(SupportsException) as ctx:
+            self._get_provider()._process_desired_zone(zone1.copy())
+        self.assertEqual(
+            'mock_id: healthcheck protocol "ICMP" not supported',
+            str(ctx.exception),
+        )
 
     def test_simple_process_desired_zone(self):
         # simple records should not get changed by _process_desired_zone
