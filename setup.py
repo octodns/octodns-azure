@@ -47,7 +47,7 @@ setup(
         'test': tests_require,
     },
     install_requires=(
-        'azure-identity>=1.7.1,<1.8.0',
+        'azure-identity>=1.16.1',
         'azure-mgmt-dns>=8.1.0,<8.2.0',
         'azure-mgmt-privatedns>=1.0.0,<1.1.0',
         'azure-mgmt-trafficmanager>=1.1.0,<1.2.0',
