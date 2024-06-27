@@ -1,7 +1,8 @@
-## v0.0.8 - 2024-??-?? - 
+## v0.0.8 - 2024-06-27 - More feature support
 
 * Support for authenticating via the CLI/AzureCliCredential
 * Validate that healthcheck protocol is supported (HTTP, HTTPS, TCP)
+* Upgrade `azure-identity>= 1.6.1` to fix security vulnerabilities
 
 ## v0.0.7 - 2023-11-14 - Maintenance release
 
