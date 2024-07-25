@@ -936,6 +936,8 @@ class TestAzureDnsProvider(TestCase):
             directory_id='mock_directory',
             client_id='mock_client',
             key='mock_key',
+            client_status_retries=4,
+            client_total_retries=42,
             strict_supports=False,
         )
 
@@ -4203,6 +4205,37 @@ class TestAzureDnsProvider(TestCase):
         )
         with self.assertRaises(AzureException):
             _ = provider._client_credential
+
+    def test_client_retry_policy(self):
+        # client_status_retries & client_total_retries
+        provider = self._get_provider()
+        policy = provider._dns_client_retry_policy
+        # get provider passes client_status_retries=4 and client_total_retries=42
+        self.assertEqual(4, policy.status_retries)
+        self.assertEqual(42, policy.total_retries)
+        # we should have defaults for these
+        self.assertEqual(0.8, policy.backoff_factor)
+        self.assertEqual(120, policy.backoff_max)
+
+        # client_retry_policy
+        provider = AzureProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            strict_supports=False,
+            client_retry_policy={'backoff_factor': 0.5, 'backoff_max': 90},
+        )
+        policy = provider._dns_client_retry_policy
+        # we should have the (azure) defaults we passed client_retry_policy and
+        # didn't include them
+        self.assertEqual(3, policy.status_retries)
+        self.assertEqual(10, policy.total_retries)
+        # and we should have the values we explicitly set
+        self.assertEqual(0.5, policy.backoff_factor)
+        self.assertEqual(90, policy.backoff_max)
 
 
 class TestPrivateAzureDnsProvider(TestCase):

@@ -598,6 +598,7 @@ class AzureBaseProvider(BaseProvider):
         client_credential_method=CREDENTIAL_METHOD_CLIENT_SECRET,
         client_total_retries=10,
         client_status_retries=3,
+        client_retry_policy=None,
         authority="https://login.microsoftonline.com",
         base_url="https://management.azure.com",
         top=100,
@@ -609,7 +610,7 @@ class AzureBaseProvider(BaseProvider):
             '__init__: id=%s, client_id=%s, '
             'key=***, directory_id:%s, authority:%s, '
             'base_url:%s, client_total_retries:%d, '
-            'client_status_retries:%d, top:%d',
+            'client_status_retries:%d, client_retry_policy:%s, top:%d',
             id,
             client_id,
             directory_id,
@@ -617,6 +618,7 @@ class AzureBaseProvider(BaseProvider):
             base_url,
             client_total_retries,
             client_status_retries,
+            client_retry_policy,
             top,
         )
         super().__init__(id, *args, **kwargs)
@@ -640,10 +642,20 @@ class AzureBaseProvider(BaseProvider):
         self.__azure_zones = None
         self._required_root_ns_values = {}
 
-        self._dns_client_retry_policy = RetryPolicy(
-            total_retries=client_total_retries,
-            status_retries=client_status_retries,
-        )
+        if client_retry_policy is None:
+            # we didn't get a full retry_policy, so use the params to create one
+            client_retry_policy = {
+                'total_retries': client_total_retries,
+                'status_retries': client_status_retries,
+            }
+
+        # RetryPolicy does not take it's configuration values as params, they
+        # have to be explicitly set as properties, see examples:
+        # https://learn.microsoft.com/en-us/python/api/azure-core/azure.core.pipeline.policies.retrypolicy?view=azure-python#examples
+        retry_policy = RetryPolicy()
+        for k, v in client_retry_policy.items():
+            setattr(retry_policy, k, v)
+        self._dns_client_retry_policy = retry_policy
 
     @property
     def _client_credential(self):
