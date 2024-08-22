@@ -1,3 +1,8 @@
+## v0.0.9 - 2024-08-22 - Retry until your hearts content
+
+* Add support for fully managing/configuring the client retry policy & fix
+  previous config options so that they actually take effect
+
 ## v0.0.8 - 2024-06-27 - More feature support
 
 * Support for authenticating via the CLI/AzureCliCredential
