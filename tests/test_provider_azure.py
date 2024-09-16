@@ -880,6 +880,32 @@ class Test_ProfileIsMatch(TestCase):
                 profile(), profile(endpoint_status=EndpointStatus.DISABLED)
             )
         )
+        # compare always_serve if endpoint is enabled
+        self.assertFalse(
+            is_match(
+                profile(
+                    endpoint_status=EndpointStatus.ENABLED,
+                    always_serve=AlwaysServe.ENABLED,
+                ),
+                profile(
+                    endpoint_status=EndpointStatus.ENABLED,
+                    always_serve=AlwaysServe.DISABLED,
+                ),
+            )
+        )
+        # always_serve shouldn't matter if endpoint is disabled
+        self.assertTrue(
+            is_match(
+                profile(
+                    endpoint_status=EndpointStatus.DISABLED,
+                    always_serve=AlwaysServe.ENABLED,
+                ),
+                profile(
+                    endpoint_status=EndpointStatus.DISABLED,
+                    always_serve=AlwaysServe.DISABLED,
+                ),
+            )
+        )
         self.assertFalse(
             is_match(profile(endpoint_type='b'), profile(endpoint_type='b'))
         )

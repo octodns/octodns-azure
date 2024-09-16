@@ -473,7 +473,13 @@ def _profile_is_match(have, desired):
             have_endpoint.name != desired_endpoint.name
             or have_endpoint.type != desired_endpoint.type
             or have_status != desired_status
-            or have_always_serve != desired_always_serve
+        ):
+            return false(have_endpoint, desired_endpoint, have.name)
+
+        # check always_serve only if endpoint is enabled, otherwise it doesn't matter
+        if (
+            have_status == EndpointStatus.ENABLED
+            and have_always_serve != desired_always_serve
         ):
             return false(have_endpoint, desired_endpoint, have.name)
 
