@@ -1,3 +1,8 @@
+## v0.0.10 - 2024-??-?? - ????
+
+* Don't attempt to change 'always_serve' flag when Traffic manager's endpoint
+  is disabled.
+
 ## v0.0.9 - 2024-08-22 - Retry until your hearts content
 
 * Add support for fully managing/configuring the client retry policy & fix
