@@ -797,7 +797,7 @@ class Test_GetMonitor(TestCase):
         self.assertEqual(headers.value, record.healthcheck_host())
 
         # test TCP monitor
-        record._octodns['healthcheck']['protocol'] = 'TCP'
+        record.octodns['healthcheck']['protocol'] = 'TCP'
         monitor = _get_monitor(record)
         self.assertEqual(monitor.protocol, 'TCP')
         self.assertIsNone(monitor.custom_headers)
@@ -1416,7 +1416,7 @@ class TestAzureDnsProvider(TestCase):
         extra = extra[0]
         self.assertIsInstance(extra, Update)
         self.assertEqual(extra.new, record)
-        desired._remove_record(record)
+        desired.remove_record(record)
         tm_list.return_value.pop()
 
         # test new dynamic record does not produce an extra change for it
@@ -1428,7 +1428,7 @@ class TestAzureDnsProvider(TestCase):
                 'ttl': record.ttl,
                 'value': record.value,
                 'dynamic': record.dynamic._data(),
-                'octodns': record._octodns,
+                'octodns': record.octodns,
             },
         )
         # test change in healthcheck by using a different port number
@@ -1483,7 +1483,7 @@ class TestAzureDnsProvider(TestCase):
         self.assertTrue(
             str(ctx.exception).endswith('must be of type A/AAAA/CNAME')
         )
-        desired._remove_record(unsupported_dynamic)
+        desired.remove_record(unsupported_dynamic)
 
         # test colliding ATM names throws exception
         record1 = Record.new(
@@ -3596,7 +3596,7 @@ class TestAzureDnsProvider(TestCase):
             'ttl': record.ttl,
             'value': record.value,
             'dynamic': dynamic,
-            'octodns': record._octodns,
+            'octodns': record.octodns,
         }
         new_record = Record.new(zone, record.name, data)
         tm_sync.reset_mock()
@@ -3800,7 +3800,7 @@ class TestAzureDnsProvider(TestCase):
         provider, existing, dynamic_record = self._get_dynamic_package()
         profiles = self._get_tm_profiles(provider)
         dynamic_record2 = self._get_dynamic_record(existing)
-        dynamic_record2._octodns['healthcheck']['port'] += 1
+        dynamic_record2.octodns['healthcheck']['port'] += 1
         change = Update(dynamic_record, dynamic_record2)
         provider._apply_Update(change)
         tm_sync, dns_update, tm_delete = (
