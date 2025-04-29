@@ -1,4 +1,4 @@
-## v0.0.10 - 2024-??-?? - ????
+## v1.0.0 - 2025-04-29 - Long overdue 1.x
 
 * Address pending octoDNS 2.x deprecations, require minimum of 1.5.x
 * Don't attempt to change 'always_serve' flag when Traffic manager's endpoint
