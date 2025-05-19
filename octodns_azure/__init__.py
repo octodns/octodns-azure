@@ -989,6 +989,7 @@ class AzureProvider(AzureBaseProvider):
         if self._dns_client is None:
             self._dns_client = DnsManagementClient(
                 credential=self._client_credential,
+                credential_scopes=[self._base_url],
                 subscription_id=self._client_subscription_id,
                 retry_policy=self._dns_client_retry_policy,
                 base_url=self._base_url,
@@ -2017,6 +2018,7 @@ class AzurePrivateProvider(AzureBaseProvider):
         if self._dns_client is None:
             self._dns_client = PrivateDnsManagementClient(
                 credential=self._client_credential,
+                credential_scopes=[self._base_url + "/.default"],
                 subscription_id=self._client_subscription_id,
                 base_url=self._base_url,
             )
