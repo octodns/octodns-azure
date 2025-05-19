@@ -1,3 +1,7 @@
+## v1.1.? - 2025-??-?? - ???
+
+* Fix support for CN tenant
+
 ## v1.0.0 - 2025-04-29 - Long overdue 1.x
 
 * Address pending octoDNS 2.x deprecations, require minimum of 1.5.x
