@@ -15,7 +15,7 @@ def version():
         for line in fh:
             if line.startswith('__version__'):
                 return line.split("'")[1]
-    raise Exception('failed to determine version number')
+    return 'unknown'
 
 
 description, long_description = descriptions()
@@ -37,7 +37,6 @@ setup(
             'build>=0.7.0',
             'changelet',
             'isort>=5.11.5',
-            'markdown-it-py>=2.2.0',
             'pyflakes>=2.2.0',
             'readme_renderer[md]>=26.0',
             'twine>=3.4.2',
