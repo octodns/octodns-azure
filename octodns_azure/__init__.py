@@ -8,6 +8,7 @@ from functools import reduce
 from ipaddress import ip_address, ip_network
 from logging import getLogger
 
+from azure.core.exceptions import ResourceNotFoundError
 from azure.core.pipeline.policies import RetryPolicy
 from azure.identity import AzureCliCredential, ClientSecretCredential
 from azure.mgmt.dns import DnsManagementClient
@@ -766,11 +767,16 @@ class AzureBaseProvider(BaseProvider):
 
         zone_name = zone.name[:-1]
 
-        if self._check_zone(zone_name):
+        try:
             exists = True
             rg = self._resource_group
             top = self._dns_client_top
-            for azrecord in self._zone_records(rg, zone_name, top):
+            azrecords = self._zone_records(rg, zone_name, top)
+        except ResourceNotFoundError:
+            exists = False
+
+        if exists:
+            for azrecord in azrecords:
                 typ = _parse_azure_type(azrecord.type)
                 if typ not in self.SUPPORTS:
                     continue
