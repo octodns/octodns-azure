@@ -5,6 +5,7 @@
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
+from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import AzureCliCredential
 from azure.mgmt.dns.models import (
     AaaaRecord,
@@ -4051,12 +4052,9 @@ class TestAzureDnsProvider(TestCase):
         rs.append(recordSet)
 
         record_list = provider.dns_client.record_sets.list_by_dns_zone
-        record_list.return_value = rs
-
-        err_msg = 'The Resource \'Microsoft.Network/dnszones/unit3.test\' '
-        err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider.dns_client.zones.get
-        _get.side_effect = CloudError(Mock(status=404), err_msg)
+        record_list.side_effect = ResourceNotFoundError(
+            'unit3.test missing in mock_rg'
+        )
 
         exists = provider.populate(Zone('unit3.test.', []))
         self.assertFalse(exists)
@@ -4580,13 +4578,10 @@ class TestPrivateAzureDnsProvider(TestCase):
         recordSet.name, recordSet.ttl, recordSet.type = 'a2', 1, 'A'
         rs.append(recordSet)
 
-        record_list = provider.dns_client.record_sets.list_by_dns_zone
-        record_list.return_value = rs
-
-        err_msg = 'The Resource \'Microsoft.Network/dnszones/unit3.test\' '
-        err_msg += 'under resource group \'mock_rg\' was not found.'
-        _get = provider.dns_client.zones.get
-        _get.side_effect = CloudError(Mock(status=404), err_msg)
+        record_list = provider.dns_client.record_sets.list
+        record_list.side_effect = ResourceNotFoundError(
+            'unit3.test missing in mock_rg'
+        )
 
         exists = provider.populate(Zone('unit3.test.', []))
         self.assertFalse(exists)
