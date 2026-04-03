@@ -1,3 +1,12 @@
+## 1.1.0 - 2026-04-03
+
+Minor:
+* Fix support for CN tenant - [#108](https://github.com/octodns/octodns-azure/pull/108)
+
+Patch:
+* Speed up populate by skipping _check_zone and catching missing-zone errors from _zone_records - [#120](https://github.com/octodns/octodns-azure/pull/120)
+* Use new [changelet](https://github.com/octodns/changelet) tooling - [#107](https://github.com/octodns/octodns-azure/pull/107)
+
 ## v1.0.0 - 2025-04-29 - Long overdue 1.x
 
 * Address pending octoDNS 2.x deprecations, require minimum of 1.5.x
