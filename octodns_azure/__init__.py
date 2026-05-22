@@ -768,10 +768,10 @@ class AzureBaseProvider(BaseProvider):
         zone_name = zone.name[:-1]
 
         try:
-            exists = True
             rg = self._resource_group
             top = self._dns_client_top
-            azrecords = self._zone_records(rg, zone_name, top)
+            azrecords = list(self._zone_records(rg, zone_name, top))
+            exists = True
         except ResourceNotFoundError:
             exists = False
 
