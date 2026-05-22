@@ -52,6 +52,17 @@ from octodns_azure import (
     _root_traffic_manager_name,
 )
 
+
+class _DeferredResourceNotFoundPager:
+    """Pager that raises ResourceNotFoundError on iteration (like azure ItemPaged)."""
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        raise ResourceNotFoundError('zone missing')
+
+
 zone_public = Zone(name='unit.tests.', sub_zones=[])
 octo_records = []
 octo_records.append(
@@ -4052,14 +4063,13 @@ class TestAzureDnsProvider(TestCase):
         rs.append(recordSet)
 
         record_list = provider.dns_client.record_sets.list_by_dns_zone
-        record_list.side_effect = ResourceNotFoundError(
-            'unit3.test missing in mock_rg'
-        )
+        record_list.return_value = _DeferredResourceNotFoundPager()
 
-        exists = provider.populate(Zone('unit3.test.', []))
+        zone = Zone('unit3.test.', [])
+        exists = provider.populate(zone)
         self.assertFalse(exists)
 
-        self.assertEqual(len(zone_public.records), 0)
+        self.assertEqual(len(zone.records), 0)
 
     def test_populate_caches_root_ns(self):
         provider = self._get_provider()
@@ -4579,11 +4589,10 @@ class TestPrivateAzureDnsProvider(TestCase):
         rs.append(recordSet)
 
         record_list = provider.dns_client.record_sets.list
-        record_list.side_effect = ResourceNotFoundError(
-            'unit3.test missing in mock_rg'
-        )
+        record_list.return_value = _DeferredResourceNotFoundPager()
 
-        exists = provider.populate(Zone('unit3.test.', []))
+        zone = Zone('unit3.test.', [])
+        exists = provider.populate(zone)
         self.assertFalse(exists)
 
-        self.assertEqual(len(zone_private.records), 0)
+        self.assertEqual(len(zone.records), 0)
