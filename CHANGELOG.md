@@ -1,3 +1,8 @@
+## 1.1.1 - 2026-05-22
+
+Patch:
+* Fix populate for missing Azure DNS zones when record_sets list returns a lazy pager (regression from 1.1.0) - [#124](https://github.com/octodns/octodns-azure/pull/124)
+
 ## 1.1.0 - 2026-04-03
 
 Minor:
