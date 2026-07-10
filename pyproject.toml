@@ -1,5 +1,78 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "octodns-azure"
+description = "Azure DNS & TrafficManager provider for octoDNS"
+authors = [{name = "Ross McFarland", email = "rwmcfa1@gmail.com"}]
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+dynamic = ["version"]
+keywords = ["dns", "octodns", "dns-as-code"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: OS Independent",
+    "Topic :: Internet :: Name Service (DNS)",
+    "Topic :: System :: Systems Administration",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+]
+dependencies = [
+    "azure-identity>=1.16.1",
+    "azure-mgmt-dns>=8.1.0,<8.2.0",
+    "azure-mgmt-privatedns>=1.0.0,<1.1.0",
+    "azure-mgmt-trafficmanager>=1.1.0,<1.2.0",
+    "msrestazure>=0.6.4,<0.7.0",
+    "octodns>=1.5.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/octodns/octodns-azure"
+Source = "https://github.com/octodns/octodns-azure"
+Issues = "https://github.com/octodns/octodns-azure/issues"
+
+[project.optional-dependencies]
+test = [
+    "pytest>=6.2.5",
+    "pytest-cov>=3.0.0",
+    "pytest-network>=0.0.1",
+]
+dev = [
+    "pytest>=6.2.5",
+    "pytest-cov>=3.0.0",
+    "pytest-network>=0.0.1",
+    # we need to manually/explicitely bump major versions as they're
+    # likely to result in formatting changes that should happen in their
+    # own PR. This will basically happen yearly
+    # https://black.readthedocs.io/en/stable/the_black_code_style/index.html#stability-policy
+    "black>=26.0.0,<27.0.0",
+    "build>=0.7.0",
+    "changelet",
+    "isort>=5.11.5",
+    "proviso",
+    "pyflakes>=2.2.0",
+    "readme_renderer[md]>=26.0",
+    "twine>=3.4.2",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "octodns_azure.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["octodns_azure*"]
+
 [tool.black]
 line-length=80
+target-version = ["py310", "py311", "py312", "py313", "py314"]
 skip-string-normalization=true
 skip-magic-trailing-comma=true
 
