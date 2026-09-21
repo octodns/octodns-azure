@@ -20,7 +20,9 @@ from azure.mgmt.dns.models import (
     MxRecord,
     NsRecord,
     PtrRecord,
+    RecordSet,
     SrvRecord,
+    SubResource,
     TxtRecord,
     Zone,
 )
@@ -40,7 +42,9 @@ from azure.mgmt.trafficmanager.models import (
 
 from octodns.provider import ProviderException, SupportsException
 from octodns.provider.base import BaseProvider
-from octodns.record import GeoCodes, Record, Update
+from octodns.record import Delete, GeoCodes, Record, Update
+
+from .record import AzureAliasRecord, _is_tm_profile_id
 
 # TODO: remove __VERSION__ with the next major version release
 __version__ = __VERSION__ = '1.1.1'
@@ -315,11 +319,12 @@ def _parse_azure_type(string):
     return string.split('/')[-1]
 
 
-_TM_PROFILE_PROVIDER = '/providers/microsoft.network/trafficmanagerprofiles/'
-
-
-def _is_tm_profile_id(resource_id):
-    return _TM_PROFILE_PROVIDER in resource_id.lower()
+def _azure_recordsets(record):
+    '''The (name, Azure type) of each Azure recordset backing a record. That's
+    one per value type for AzureProvider/ALIAS and just the one otherwise.'''
+    if record._type == AzureAliasRecord._type:
+        return set((record.name, v._type) for v in record.values)
+    return {(record.name, record._type)}
 
 
 def _root_traffic_manager_name(record):
@@ -960,6 +965,10 @@ class AzureProvider(AzureBaseProvider):
         # https://learn.microsoft.com/en-us/rest/api/dns/record-sets/list-by-dns-zone
         # Top default 100
         top: 100
+        # Manage alias records that point at resources other than Traffic
+        # Manager profiles as AzureProvider/ALIAS records, see the README
+        # before enabling. Default false
+        manage_aliases: false
 
         Example config file with variables:
             "
@@ -995,15 +1004,26 @@ class AzureProvider(AzureBaseProvider):
     SUPPORTS_ROOT_NS = True
     SUPPORTS_DYNAMIC = True
     SUPPORTS_DYNAMIC_SUBNETS = True
+    SUPPORTS = AzureBaseProvider.SUPPORTS | {AzureAliasRecord._type}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, manage_aliases=False, **kwargs):
         super().__init__(*args, **kwargs)
+        self.log.debug('__init__: manage_aliases=%s', manage_aliases)
+        self.manage_aliases = manage_aliases
         self.__tm_client = None
         # zone_name (no trailing dot) -> {(record_name, type): target_id} for
         # alias recordsets we found during populate that point at something
-        # other than a Traffic Manager profile; we don't support those, see
-        # _populate_record and _process_desired_zone below.
+        # other than a Traffic Manager profile; when manage_aliases is off we
+        # don't manage those, see _populate_record and _process_desired_zone
+        # below.
         self._unsupported_aliases = defaultdict(dict)
+        # zone_name (no trailing dot) -> {record_name: [(type, target_id,
+        # ttl), ...]} for alias recordsets found during populate when
+        # manage_aliases is on, aggregated into AzureAliasRecords at the end
+        self._pending_aliases = defaultdict(lambda: defaultdict(list))
+        # zone_name (no trailing dot) -> {record_name, ...} for names whose
+        # alias recordsets had differing TTLs, see _extra_changes
+        self._divergent_alias_ttls = defaultdict(set)
 
     @property
     def dns_client(self):
@@ -1080,26 +1100,73 @@ class AzureProvider(AzureBaseProvider):
         return self._get_tm_profile_by_name(name)
 
     def populate(self, zone, target=False, lenient=False):
+        zone_name = zone.name[:-1]
         # clear out anything we noticed last time around so that a record
         # that's since been fixed or removed in Azure doesn't linger here
-        self._unsupported_aliases.pop(zone.name[:-1], None)
-        return super().populate(zone, target=target, lenient=lenient)
+        self._unsupported_aliases.pop(zone_name, None)
+        self._divergent_alias_ttls.pop(zone_name, None)
+        self._pending_aliases.pop(zone_name, None)
+
+        exists = super().populate(zone, target=target, lenient=lenient)
+
+        # an AzureAliasRecord covers all of the alias recordsets at a name so
+        # they can only be built once we've seen all of them
+        aliases = self._pending_aliases.pop(zone_name, {})
+        for record_name, found in sorted(aliases.items()):
+            ttls = set(ttl for _, _, ttl in found)
+            ttl = min(ttls)
+            if len(ttls) > 1:
+                fqdn = (
+                    f'{record_name}.{zone.name}' if record_name else zone.name
+                )
+                self.log.warning(
+                    'populate: alias recordsets for %s have differing TTLs, '
+                    'using %d, they will be brought in line on the next sync',
+                    fqdn,
+                    ttl,
+                )
+                self._divergent_alias_ttls[zone_name].add(record_name)
+            data = {
+                'type': AzureAliasRecord._type,
+                'ttl': ttl,
+                'values': [
+                    {'type': typ, 'target-resource': target_id}
+                    for typ, target_id, _ in found
+                ],
+            }
+            record = Record.new(
+                zone, record_name, data, source=self, lenient=lenient
+            )
+            zone.add_record(record, lenient=lenient)
+
+        return exists
 
     def _populate_record(self, zone, azrecord, lenient=False):
         typ = _parse_azure_type(azrecord.type)
         if typ in ('A', 'AAAA', 'CNAME'):
             target_id = getattr(azrecord.target_resource, 'id', None)
             if target_id and not _is_tm_profile_id(target_id):
-                # this is an alias to something other than a Traffic Manager
-                # profile, e.g. a Front Door endpoint; octoDNS only knows how
-                # to manage Traffic Manager backed aliases, so we skip it and
-                # leave it unmanaged, but remember it so that we can error out
-                # if the desired config would otherwise try to overwrite it.
                 record_name = azrecord.name if azrecord.name != '@' else ''
+                if self.manage_aliases:
+                    # an alias to something other than a Traffic Manager
+                    # profile, e.g. a Front Door endpoint, stash it away and
+                    # populate will turn it into an AzureAliasRecord once it's
+                    # seen everything at this name
+                    self._pending_aliases[zone.name[:-1]][record_name].append(
+                        (typ, target_id, azrecord.ttl)
+                    )
+                    return None
+                # this is an alias to something other than a Traffic Manager
+                # profile, e.g. a Front Door endpoint; with manage_aliases off
+                # octoDNS only manages Traffic Manager backed aliases, so we
+                # skip it and leave it unmanaged, but remember it so that we
+                # can error out if the desired config would otherwise try to
+                # overwrite it.
                 self.log.warning(
                     '_populate_record: %s %s is an Azure alias to %s, '
-                    'octoDNS does not support Azure alias records to '
-                    'non-Traffic Manager resources; skipping it',
+                    'octoDNS does not manage Azure alias records to '
+                    'non-Traffic Manager resources unless manage_aliases is '
+                    'enabled; skipping it',
                     azrecord.fqdn,
                     typ,
                     target_id,
@@ -1400,19 +1467,79 @@ class AzureProvider(AzureBaseProvider):
 
         return record, modified
 
-    def _process_desired_zone(self, desired):
-        unsupported_aliases = self._unsupported_aliases.get(
-            desired.name[:-1], {}
-        )
+    def _check_desired_aliases(self, desired):
+        # Azure has one recordset per name & type, octoDNS on the other hand
+        # sees AzureProvider/ALIAS as a type of its own and so won't notice
+        # when it and another record at the same name want the same recordset
+        by_name = defaultdict(list)
         for record in desired.records:
-            key = (record.name, record._type)
-            if key in unsupported_aliases:
-                target_id = unsupported_aliases[key]
+            by_name[record.name].append(record)
+
+        for records in by_name.values():
+            alias = next(
+                (r for r in records if r._type == AzureAliasRecord._type), None
+            )
+            if alias is None:
+                continue
+            others = [r for r in records if r is not alias]
+            alias_types = [v._type for v in alias.values]
+
+            for value in alias.values:
+                # validation should have already caught this, but it can be
+                # disabled and we really don't want to fight with dynamic
+                # records over Traffic Manager aliases
+                if _is_tm_profile_id(value.target_resource):
+                    raise AzureException(
+                        f'{alias.fqdn} {alias._type} value '
+                        f'{value.target_resource} is a Traffic Manager '
+                        'profile, use a dynamic record instead'
+                    )
+
+            for other in others:
+                if other._type in alias_types:
+                    raise AzureException(
+                        f'{alias.fqdn} has both a {other._type} record and '
+                        f'an {alias._type} record with a {other._type} '
+                        'value, Azure only allows one of them'
+                    )
+                if other._type == 'CNAME':
+                    raise AzureException(
+                        f'{alias.fqdn} has both a CNAME record and an '
+                        f'{alias._type} record, CNAMEs cannot coexist with '
+                        'other records'
+                    )
+            if 'CNAME' in alias_types and (others or len(alias_types) > 1):
                 raise AzureException(
-                    f'{record.fqdn} {record._type} is an Azure alias to '
-                    f'{target_id}, which octoDNS does not support; delete '
-                    'the alias in Azure or remove the record from the config'
+                    f'{alias.fqdn} {alias._type} record has a CNAME value, '
+                    'CNAMEs cannot coexist with other records'
                 )
+
+    def _process_desired_zone(self, desired):
+        if self.manage_aliases:
+            self._check_desired_aliases(desired)
+        else:
+            for record in desired.records:
+                if record._type == AzureAliasRecord._type:
+                    # explicitly error rather than silently omitting the
+                    # record, it's clear the config wants it managed
+                    raise SupportsException(
+                        f'{self.id}: {record._type} records require '
+                        f'manage_aliases: true, found {record.fqdn}'
+                    )
+
+            unsupported_aliases = self._unsupported_aliases.get(
+                desired.name[:-1], {}
+            )
+            for record in desired.records:
+                key = (record.name, record._type)
+                if key in unsupported_aliases:
+                    target_id = unsupported_aliases[key]
+                    raise AzureException(
+                        f'{record.fqdn} {record._type} is an Azure alias to '
+                        f'{target_id}, which octoDNS does not manage; delete '
+                        'the alias in Azure, remove the record from the '
+                        'config, or enable manage_aliases'
+                    )
 
         for record in desired.records:
             protocol = record.healthcheck_protocol
@@ -1441,6 +1568,24 @@ class AzureProvider(AzureBaseProvider):
         log = self.log.info
         seen_profiles = {}
         extra = []
+
+        # alias recordsets at a name with differing TTLs populate using the
+        # lowest of them, which may well match the desired TTL; make sure they
+        # all get brought in line
+        divergent = self._divergent_alias_ttls.get(desired.name[:-1], set())
+        for record in desired.records:
+            if (
+                record._type == AzureAliasRecord._type
+                and record.name in divergent
+                and record not in changed
+            ):
+                log(
+                    '_extra_changes: %s alias recordsets have differing '
+                    'TTLs, will be synced',
+                    record.fqdn,
+                )
+                extra.append(Update(record, record))
+
         for record in desired.records:
             if not getattr(record, 'dynamic', False):
                 # Already changed, or not dynamic, no need to check it
@@ -1837,6 +1982,11 @@ class AzureProvider(AzureBaseProvider):
         '''
         record = change.new
 
+        if record._type == AzureAliasRecord._type:
+            self._put_alias_recordsets(record)
+            self.log.debug('*  Success Create: %s', record)
+            return
+
         # When a zone is first created we won't have had the required root NS
         # values early on enough to deal with them in _process_desired_zone. We
         # therefore have to do a secondary check here to make sure we're ok,
@@ -1949,6 +2099,15 @@ class AzureProvider(AzureBaseProvider):
         '''
         existing = change.existing
         new = change.new
+
+        if new._type == AzureAliasRecord._type:
+            # recordsets for value types that have been removed are deleted up
+            # front in _apply, all that's left is to (re)PUT the rest. That
+            # includes unchanged ones, it's cheap and makes sure TTLs converge
+            self._put_alias_recordsets(new)
+            self.log.debug('*  Success Update: %s', new)
+            return
+
         existing_is_dynamic = getattr(existing, 'dynamic', False)
         new_is_dynamic = getattr(new, 'dynamic', False)
 
@@ -2008,9 +2167,111 @@ class AzureProvider(AzureBaseProvider):
 
     def _apply_Delete(self, change):
         record = change.existing
+
+        if record._type == AzureAliasRecord._type:
+            self._delete_alias_recordsets(
+                record, [v._type for v in record.values]
+            )
+            self.log.debug('*  Success Delete: %s', record)
+            return
+
         super()._apply_Delete(change)
 
         if getattr(record, 'dynamic', False):
+            self._traffic_managers_gc(record, set())
+
+    def _put_alias_recordsets(self, record):
+        create = self.dns_client.record_sets.create_or_update
+        for value in record.values:
+            create(
+                resource_group_name=self._resource_group,
+                zone_name=record.zone.name[:-1],
+                relative_record_set_name=record.name or '@',
+                record_type=value._type,
+                parameters=RecordSet(
+                    ttl=record.ttl,
+                    target_resource=SubResource(id=value.target_resource),
+                ),
+            )
+
+    def _delete_alias_recordsets(self, record, types):
+        for typ in sorted(types):
+            self._delete_record(
+                self._resource_group,
+                record.zone.name[:-1],
+                record.name or '@',
+                typ,
+            )
+
+    def _apply(self, plan):
+        desired = plan.desired
+        changes = plan.changes
+        self.log.debug(
+            '_apply: zone=%s, len(changes)=%d', desired.name, len(changes)
+        )
+
+        self._check_zone(desired.name[:-1], create=True)
+
+        # Azure has a single recordset per name & type and octoDNS has no idea
+        # that an AzureProvider/ALIAS value and a plain/dynamic record of the
+        # same type are the same thing, e.g. switching `A foo` to an alias
+        # shows up as a Delete of the A and a Create of the alias. Every
+        # recordset that will be PUT (create_or_update) in this apply replaces
+        # whatever's there wholesale so we never delete them, which avoids a
+        # window where the name doesn't resolve, and more importantly
+        # deleting something we've just created.
+        will_put = set()
+        for change in changes:
+            if not isinstance(change, Delete):
+                will_put |= _azure_recordsets(change.new)
+
+        # Deletes go first to avoid problems with switching between CNAMEs
+        # and other types. That includes the recordsets of value types removed
+        # from alias records.
+        replaced = []
+        for change in changes:
+            if isinstance(change, Delete):
+                record = change.existing
+                recordsets = _azure_recordsets(record)
+                if recordsets.isdisjoint(will_put):
+                    self._apply_Delete(change)
+                    continue
+                self.log.info(
+                    '_apply: %s %s will be replaced rather than deleted',
+                    record.fqdn,
+                    record._type,
+                )
+                if record._type == AzureAliasRecord._type:
+                    self._delete_alias_recordsets(
+                        record, [t for _, t in recordsets - will_put]
+                    )
+                elif getattr(record, 'dynamic', False):
+                    replaced.append(record)
+            elif (
+                isinstance(change, Update)
+                and change.new._type == AzureAliasRecord._type
+            ):
+                removed = (
+                    _azure_recordsets(change.existing)
+                    - _azure_recordsets(change.new)
+                    - will_put
+                )
+                self._delete_alias_recordsets(
+                    change.existing, [t for _, t in removed]
+                )
+
+        for change in changes:
+            if isinstance(change, Delete):
+                continue
+            class_name = change.__class__.__name__
+            getattr(self, f'_apply_{class_name}')(change)
+
+        # now that their recordsets point elsewhere we can clean up the
+        # Traffic Managers of dynamic records that were replaced. Profile
+        # names include the record's type so nothing else in the desired
+        # state can be using them; a dynamic record of the same name & type
+        # would have been an Update rather than a Delete.
+        for record in replaced:
             self._traffic_managers_gc(record, set())
 
     def _delete_record(
