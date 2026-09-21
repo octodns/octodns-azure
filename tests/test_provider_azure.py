@@ -47,6 +47,7 @@ from octodns_azure import (
     _check_endswith_dot,
     _format_azure_subnets,
     _get_monitor,
+    _is_tm_profile_id,
     _parse_azure_type,
     _profile_is_match,
     _root_traffic_manager_name,
@@ -755,6 +756,31 @@ class Test_ParseAzureType(TestCase):
             ['MX', 'Microsoft.Network/dnszones/MX'],
         ]:
             self.assertEqual(expected, _parse_azure_type(test))
+
+
+class Test_IsTmProfileId(TestCase):
+    def test_is_tm_profile_id(self):
+        self.assertTrue(
+            _is_tm_profile_id(
+                '/subscriptions/s/resourceGroups/rg/providers/'
+                'Microsoft.Network/trafficManagerProfiles/foo'
+            )
+        )
+        # case-insensitive
+        self.assertTrue(
+            _is_tm_profile_id(
+                '/subscriptions/s/resourceGroups/rg/PROVIDERS/'
+                'microsoft.network/TRAFFICMANAGERPROFILES/foo'
+            )
+        )
+        # an alias to something else entirely, e.g. a Front Door endpoint
+        self.assertFalse(
+            _is_tm_profile_id(
+                '/subscriptions/123456/resourceGroups/rg/providers/'
+                'Microsoft.Cdn/profiles/prdglobal-redirect/afdEndpoints/'
+                'wwwexamplecom'
+            )
+        )
 
 
 class Test_CheckEndswithDot(TestCase):
@@ -4107,6 +4133,135 @@ class TestAzureDnsProvider(TestCase):
             },
             provider._required_root_ns_values,
         )
+
+    def test_populate_skips_unsupported_alias(self):
+        provider = self._get_provider()
+
+        # zone already exists
+        provider._azure_zones.add('unit.test')
+
+        front_door_id = (
+            '/subscriptions/123456/resourceGroups/rg/providers/'
+            'Microsoft.Cdn/profiles/prdglobal-redirect/afdEndpoints/'
+            'wwwexamplecom'
+        )
+
+        rs = []
+
+        # root A record aliased to a Front Door endpoint, not a Traffic
+        # Manager profile; octoDNS doesn't know how to manage this
+        recordSet = RecordSet(
+            ttl=300, target_resource=SubResource(id=front_door_id)
+        )
+        recordSet.name, recordSet.type = '@', 'A'
+        recordSet.fqdn = 'unit.test.'
+        rs.append(recordSet)
+
+        # a normal record that should still be populated
+        recordSet = RecordSet(a_records=[ARecord(ipv4_address='1.2.3.4')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'www', 300, 'A'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
+        record_list.return_value = rs
+
+        zone = Zone('unit.test.', [])
+        with self.assertLogs(provider.log.name, level='WARNING') as ctx:
+            self.assertTrue(provider.populate(zone))
+
+        # only the normal record was added, the alias was skipped
+        self.assertEqual(1, len(zone.records))
+        self.assertEqual('www', list(zone.records)[0].name)
+
+        # the skipped alias was remembered
+        self.assertEqual(
+            {('', 'A'): front_door_id},
+            provider._unsupported_aliases['unit.test'],
+        )
+
+        # and a warning was logged about it
+        self.assertTrue(
+            any(
+                'is an Azure alias to' in m and front_door_id in m
+                for m in ctx.output
+            )
+        )
+
+    def test_populate_clears_stale_unsupported_aliases(self):
+        provider = self._get_provider()
+        provider._azure_zones.add('unit.test')
+
+        # seed a stale entry from a previous populate
+        provider._unsupported_aliases['unit.test'][('', 'A')] = 'stale-id'
+
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
+        record_list.return_value = []
+
+        zone = Zone('unit.test.', [])
+        provider.populate(zone)
+
+        # re-populating with no matching alias clears the stale entry
+        self.assertEqual({}, provider._unsupported_aliases['unit.test'])
+
+    def test_process_desired_zone_unsupported_alias(self):
+        provider = self._get_provider()
+
+        front_door_id = (
+            '/subscriptions/123456/resourceGroups/rg/providers/'
+            'Microsoft.Cdn/profiles/prdglobal-redirect/afdEndpoints/'
+            'wwwexamplecom'
+        )
+        provider._unsupported_aliases[zone_public.name[:-1]][
+            ('', 'A')
+        ] = front_door_id
+
+        # desired config doesn't collide with the skipped alias, no error
+        desired = Zone(zone_public.name, sub_zones=[])
+        desired.add_record(
+            Record.new(
+                desired, 'www', {'ttl': 300, 'type': 'A', 'values': ['1.2.3.4']}
+            )
+        )
+        ret = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(list(ret.records)))
+
+        # desired config tries to (re)create the same name/type as the
+        # skipped alias, that's an error
+        desired = Zone(zone_public.name, sub_zones=[])
+        desired.add_record(
+            Record.new(
+                desired, '', {'ttl': 300, 'type': 'A', 'values': ['1.2.3.4']}
+            )
+        )
+        with self.assertRaises(AzureException) as ctx:
+            provider._process_desired_zone(desired)
+        msg = str(ctx.exception)
+        self.assertIn('is an Azure alias to', msg)
+        self.assertIn(front_door_id, msg)
+        self.assertIn(
+            'delete the alias in Azure or remove the record from the config',
+            msg,
+        )
+
+    def test_data_for_dynamic_missing_profile(self):
+        provider = self._get_provider()
+
+        # a Traffic Manager profile id that doesn't exist in this resource
+        # group (wrong RG, no permission, deleted, ...)
+        tm_id = provider._profile_name_to_id('missing')
+        azrecord = RecordSet(ttl=60, target_resource=SubResource(id=tm_id))
+        azrecord.name = '@'
+        azrecord.type = 'Microsoft.Network/dnszones/A'
+        azrecord.fqdn = 'unit.tests.'
+
+        with self.assertRaises(AzureException) as ctx:
+            provider._data_for_dynamic(azrecord)
+        msg = str(ctx.exception)
+        self.assertIn(tm_id, msg)
+        self.assertIn('unit.tests.', msg)
+        self.assertIn('not found in resource group', msg)
+        self.assertIn(provider._resource_group, msg)
 
     def test_check_zone_create_caches_root_ns(self):
         provider = self._get_provider()
