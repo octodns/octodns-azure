@@ -77,6 +77,11 @@ providers:
     # defaults to: https://management.azure.com
     # docs: https://docs.microsoft.com/en-us/python/api/azure-mgmt-resource/azure.mgmt.resource.applicationclient?view=azure-python#parameters
     #base_url: https://management.azure.com
+    # Manage Azure alias records that point at resources other than Traffic
+    # Manager profiles, e.g. Front Door endpoints, as AzureProvider/ALIAS
+    # records. See "Alias Records" below before enabling.
+    # defaults to: false
+    #manage_aliases: true
 ```
 
 The variables starting with `env/` above can be hidden in environment variables and octoDNS will automatically search for them in the shell. It is possible to also hard-code into the config file: eg, resource_group.
@@ -87,7 +92,7 @@ For management of DNS zones on [Azure Private DNS](https://learn.microsoft.com/e
 
 #### Records
 
-AzureProvider supports A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, and TXT
+AzureProvider supports A, AAAA, CAA, CNAME, MX, NS, PTR, SRV, and TXT, as well as `AzureProvider/ALIAS` (see [Alias Records](#alias-records))
 
 #### Root NS Records
 
@@ -98,6 +103,38 @@ AzureProvider supports root NS record management, but Azure requires that its ow
 AzureProvider has beta supports dynamic records.
 
 Please read https://github.com/octodns/octodns/pull/706 for an overview of how dynamic records are designed and caveats of using them.
+
+#### Alias Records
+
+Azure [alias records](https://learn.microsoft.com/en-us/azure/dns/dns-alias) that point at a Traffic Manager profile are managed by octoDNS as dynamic records. Alias records that point at anything else, e.g. Front Door or CDN endpoints, public IP addresses, or other record sets in the zone, can be managed with the provider-specific `AzureProvider/ALIAS` record type once `manage_aliases: true` is set on the provider. octoDNS only manages the alias record sets, never the resources they point at.
+
+```yaml
+'':
+  type: AzureProvider/ALIAS
+  ttl: 300
+  values:
+    - type: A
+      target-resource: /subscriptions/.../resourceGroups/rg/providers/Microsoft.Cdn/profiles/profile/afdEndpoints/endpoint
+    - type: AAAA
+      target-resource: /subscriptions/.../resourceGroups/rg/providers/Microsoft.Cdn/profiles/profile/afdEndpoints/endpoint
+www:
+  type: AzureProvider/ALIAS
+  ttl: 300
+  value:
+    type: CNAME
+    target-resource: /subscriptions/.../resourceGroups/rg/providers/Microsoft.Cdn/profiles/profile/afdEndpoints/endpoint
+```
+
+* Each value is a separate Azure alias record set of the given `type` (`A`, `AAAA`, or `CNAME`) at the record's name so a type can only appear once, `CNAME` can't be combined with other types, and it can't be used at the zone root. A name can't have both an `AzureProvider/ALIAS` value and a regular (or dynamic) record of the same type.
+* `target-resource` is the Azure resource id of the target and is compared case-insensitively. Traffic Manager profiles aren't allowed, use dynamic records for those.
+* Azure record sets each have their own TTL; if the alias record sets at a name differ the lowest is used and they'll all be updated to the configured `ttl` on the next sync.
+* Switching a name between a regular/dynamic record and an alias replaces the Azure record set in place rather than deleting and re-creating it.
+* When the target of an alias to another record set in the same zone is deleted Azure removes the alias as well.
+* `AzureProvider/ALIAS` is only supported by `AzureProvider` (not `AzurePrivateProvider`). `YamlProvider` can store them, other providers treat them as an unsupported type. As with other provider-specific types the type is only registered when `octodns_azure` is loaded, i.e. when an Azure provider is part of the octoDNS config.
+
+When `manage_aliases` is off (the default) such alias records are left alone: they're skipped, with a warning, when populating (including by `octodns-dump`), it's an error for the config to contain a record that would overwrite one, and it's an error for the config to contain `AzureProvider/ALIAS` records.
+
+Enabling `manage_aliases` brings these alias records under octoDNS's management like any other record, meaning any that aren't in the config will be deleted. Before enabling it run `octodns-dump` against the provider with `manage_aliases: true` set and add the resulting `AzureProvider/ALIAS` records to your config. Migrating a lot of records from regular records to aliases (or vice versa) at once may trip the update/delete safety thresholds.
 
 #### Healthchecks
 

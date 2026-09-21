@@ -4240,7 +4240,8 @@ class TestAzureDnsProvider(TestCase):
         self.assertIn('is an Azure alias to', msg)
         self.assertIn(front_door_id, msg)
         self.assertIn(
-            'delete the alias in Azure or remove the record from the config',
+            'delete the alias in Azure, remove the record from the config, '
+            'or enable manage_aliases',
             msg,
         )
 
@@ -4262,6 +4263,644 @@ class TestAzureDnsProvider(TestCase):
         self.assertIn('unit.tests.', msg)
         self.assertIn('not found in resource group', msg)
         self.assertIn(provider._resource_group, msg)
+
+    # AzureProvider/ALIAS (manage_aliases) tests
+
+    FRONT_DOOR_ID = (
+        '/subscriptions/123456/resourceGroups/rg/providers/'
+        'Microsoft.Cdn/profiles/prdglobal-redirect/afdEndpoints/'
+        'wwwexamplecom'
+    )
+    PUBLIC_IP_ID = (
+        '/subscriptions/123456/resourceGroups/rg/providers/'
+        'Microsoft.Network/publicIPAddresses/ip'
+    )
+
+    def _get_alias_provider(self):
+        provider = self._get_provider()
+        provider.manage_aliases = True
+        return provider
+
+    def _alias(self, zone, name, values, ttl=300):
+        return Record.new(
+            zone,
+            name,
+            {
+                'type': 'AzureProvider/ALIAS',
+                'ttl': ttl,
+                'values': [
+                    {'type': t, 'target-resource': i} for t, i in values
+                ],
+            },
+        )
+
+    def _alias_recordset(self, name, typ, target_id, ttl=300):
+        rs = RecordSet(ttl=ttl, target_resource=SubResource(id=target_id))
+        rs.name, rs.type = name, f'Microsoft.Network/dnszones/{typ}'
+        rs.fqdn = f'{name}.unit.tests.' if name != '@' else 'unit.tests.'
+        return rs
+
+    def _get_dynamic_A_record(self, zone, name='foo', _type='A'):
+        value = '1.1.1.1' if _type == 'A' else '::1'
+        return Record.new(
+            zone,
+            name,
+            data={
+                'type': _type,
+                'ttl': 60,
+                'values': [value],
+                'dynamic': {
+                    'pools': {'one': {'values': [{'value': value}]}},
+                    'rules': [{'pool': 'one'}],
+                },
+            },
+        )
+
+    def _put_calls(self, provider):
+        create = provider.dns_client.record_sets.create_or_update
+        return [
+            (
+                c.kwargs['relative_record_set_name'],
+                c.kwargs['record_type'],
+                c.kwargs['parameters'],
+            )
+            for c in create.call_args_list
+        ]
+
+    def _delete_calls(self, provider):
+        delete = provider.dns_client.record_sets.delete
+        return [(c.args[2], c.args[3]) for c in delete.call_args_list]
+
+    def test_manage_aliases_config(self):
+        provider = self._get_provider()
+        self.assertFalse(provider.manage_aliases)
+        self.assertIn('AzureProvider/ALIAS', provider.SUPPORTS)
+        self.assertNotIn('AzureProvider/ALIAS', AzurePrivateProvider.SUPPORTS)
+
+        provider = AzureProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            manage_aliases=True,
+        )
+        self.assertTrue(provider.manage_aliases)
+
+        # private DNS has no aliases
+        with self.assertRaises(TypeError):
+            AzurePrivateProvider(
+                'mock_id',
+                'mock_sub',
+                'mock_rg',
+                directory_id='mock_directory',
+                client_id='mock_client',
+                key='mock_key',
+                manage_aliases=True,
+            )
+
+    def test_populate_manage_aliases(self):
+        provider = self._get_alias_provider()
+        provider._azure_zones.add('unit.tests')
+        # stale state from a previous populate is cleared
+        provider._divergent_alias_ttls['unit.tests'].add('stale')
+
+        rs = [
+            # root A & AAAA to Front Door
+            self._alias_recordset('@', 'A', self.FRONT_DOOR_ID),
+            self._alias_recordset('@', 'AAAA', self.FRONT_DOOR_ID),
+            # www CNAME to Front Door
+            self._alias_recordset('www', 'CNAME', self.FRONT_DOOR_ID, ttl=60),
+            # ip A & AAAA with differing TTLs
+            self._alias_recordset('ip', 'A', self.PUBLIC_IP_ID, ttl=300),
+            self._alias_recordset('ip', 'AAAA', self.PUBLIC_IP_ID, ttl=60),
+        ]
+        # a plain AAAA next to an alias A
+        recordSet = RecordSet(aaaa_records=[AaaaRecord(ipv6_address='::1')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'mixed', 300, 'AAAA'
+        recordSet.target_resource = SubResource()
+        rs.append(recordSet)
+        rs.append(self._alias_recordset('mixed', 'A', self.PUBLIC_IP_ID))
+
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
+        record_list.return_value = rs
+
+        zone = Zone('unit.tests.', [])
+        with self.assertLogs(provider.log.name, level='WARNING') as ctx:
+            self.assertTrue(provider.populate(zone))
+        self.assertEqual(
+            [
+                'WARNING:AzureProvider[mock_id]:populate: alias recordsets '
+                'for ip.unit.tests. have differing TTLs, using 60, they will '
+                'be brought in line on the next sync'
+            ],
+            ctx.output,
+        )
+
+        records = {(r.name, r._type): r for r in zone.records}
+        self.assertEqual(
+            {
+                ('', 'AzureProvider/ALIAS'),
+                ('www', 'AzureProvider/ALIAS'),
+                ('ip', 'AzureProvider/ALIAS'),
+                ('mixed', 'AzureProvider/ALIAS'),
+                ('mixed', 'AAAA'),
+            },
+            set(records.keys()),
+        )
+
+        root = records[('', 'AzureProvider/ALIAS')]
+        self.assertEqual(300, root.ttl)
+        self.assertEqual(
+            [
+                {'type': 'A', 'target-resource': self.FRONT_DOOR_ID},
+                {'type': 'AAAA', 'target-resource': self.FRONT_DOOR_ID},
+            ],
+            root.data['values'],
+        )
+        www = records[('www', 'AzureProvider/ALIAS')]
+        self.assertEqual(60, www.ttl)
+        self.assertEqual(
+            {'type': 'CNAME', 'target-resource': self.FRONT_DOOR_ID},
+            www.data['value'],
+        )
+        # lowest ttl wins
+        ip = records[('ip', 'AzureProvider/ALIAS')]
+        self.assertEqual(60, ip.ttl)
+        self.assertEqual(['A', 'AAAA'], [v._type for v in ip.values])
+        self.assertEqual(['::1'], records[('mixed', 'AAAA')].values)
+
+        # nothing was treated as unsupported
+        self.assertEqual({}, provider._unsupported_aliases['unit.tests'])
+        # the divergent name was noted, stale entries are gone
+        self.assertEqual({'ip'}, provider._divergent_alias_ttls['unit.tests'])
+        # and nothing's left pending
+        self.assertNotIn('unit.tests', provider._pending_aliases)
+
+    def test_process_desired_zone_aliases_off(self):
+        provider = self._get_provider()
+
+        desired = Zone(zone_public.name, sub_zones=[])
+        desired.add_record(
+            self._alias(desired, 'www', [('A', self.FRONT_DOOR_ID)])
+        )
+        with self.assertRaises(SupportsException) as ctx:
+            provider._process_desired_zone(desired)
+        self.assertEqual(
+            'mock_id: AzureProvider/ALIAS records require manage_aliases: '
+            'true, found www.unit.tests.',
+            str(ctx.exception),
+        )
+
+    def test_process_desired_zone_aliases(self):
+        provider = self._get_alias_provider()
+
+        # with manage_aliases on unsupported aliases aren't a thing, stale
+        # state is ignored
+        provider._unsupported_aliases[zone_public.name[:-1]][
+            ('', 'A')
+        ] = self.FRONT_DOOR_ID
+
+        def desired_zone(*records):
+            desired = Zone(zone_public.name, sub_zones=[])
+            for record in records:
+                desired.add_record(record)
+            return desired
+
+        def assertRaisesMsg(msg, *records):
+            desired = desired_zone(*records)
+            with self.assertRaises(AzureException) as ctx:
+                provider._process_desired_zone(desired)
+            self.assertEqual(msg, str(ctx.exception))
+
+        zone = zone_public
+        root_a = Record.new(
+            zone, '', {'type': 'A', 'ttl': 300, 'value': '1.2.3.4'}
+        )
+        root_alias = self._alias(
+            zone, '', [('A', self.FRONT_DOOR_ID), ('AAAA', self.FRONT_DOOR_ID)]
+        )
+        root_txt = Record.new(
+            zone, '', {'type': 'TXT', 'ttl': 300, 'value': 'hello'}
+        )
+        www_alias = self._alias(zone, 'www', [('AAAA', self.FRONT_DOOR_ID)])
+        www_cname_alias = self._alias(
+            zone, 'www', [('CNAME', self.FRONT_DOOR_ID)]
+        )
+        www_a = Record.new(
+            zone, 'www', {'type': 'A', 'ttl': 300, 'value': '1.2.3.4'}
+        )
+        www_cname = Record.new(
+            zone, 'www', {'type': 'CNAME', 'ttl': 300, 'value': 'foo.bar.'}
+        )
+
+        # all good, alias at the root with a TXT, a plain A & alias AAAA at
+        # www, and the desired root A overlaps with a (stale) unsupported alias
+        desired = desired_zone(root_alias, root_txt, www_a, www_alias)
+        ret = provider._process_desired_zone(desired)
+        self.assertEqual(4, len(ret.records))
+        desired = desired_zone(root_a)
+        ret = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(ret.records))
+        # alias CNAME on its own
+        desired = desired_zone(www_cname_alias)
+        ret = provider._process_desired_zone(desired)
+        self.assertEqual(1, len(ret.records))
+
+        # plain & alias want the same recordset
+        assertRaisesMsg(
+            'unit.tests. has both a A record and an AzureProvider/ALIAS '
+            'record with a A value, Azure only allows one of them',
+            root_a,
+            root_alias,
+        )
+        # dynamic & alias want the same recordset
+        assertRaisesMsg(
+            'foo.unit.tests. has both a A record and an AzureProvider/ALIAS '
+            'record with a A value, Azure only allows one of them',
+            self._get_dynamic_A_record(zone),
+            self._alias(zone, 'foo', [('A', self.FRONT_DOOR_ID)]),
+        )
+        # plain CNAME & an alias
+        assertRaisesMsg(
+            'www.unit.tests. has both a CNAME record and an '
+            'AzureProvider/ALIAS record, CNAMEs cannot coexist with other '
+            'records',
+            www_cname,
+            www_alias,
+        )
+        # alias CNAME & something else
+        assertRaisesMsg(
+            'www.unit.tests. AzureProvider/ALIAS record has a CNAME value, '
+            'CNAMEs cannot coexist with other records',
+            www_cname_alias,
+            www_a,
+        )
+        # alias CNAME & other alias values, validation would normally catch
+        # this one
+        lenient = Record.new(
+            zone,
+            'www',
+            {
+                'type': 'AzureProvider/ALIAS',
+                'ttl': 300,
+                'values': [
+                    {'type': 'A', 'target-resource': self.FRONT_DOOR_ID},
+                    {'type': 'CNAME', 'target-resource': self.FRONT_DOOR_ID},
+                ],
+            },
+            lenient=True,
+        )
+        assertRaisesMsg(
+            'www.unit.tests. AzureProvider/ALIAS record has a CNAME value, '
+            'CNAMEs cannot coexist with other records',
+            lenient,
+        )
+        # Traffic Manager targets, validation would normally catch this one
+        tm_id = provider._profile_name_to_id('foo')
+        lenient = Record.new(
+            zone,
+            'www',
+            {
+                'type': 'AzureProvider/ALIAS',
+                'ttl': 300,
+                'value': {'type': 'A', 'target-resource': tm_id},
+            },
+            lenient=True,
+        )
+        assertRaisesMsg(
+            f'www.unit.tests. AzureProvider/ALIAS value {tm_id} is a Traffic '
+            'Manager profile, use a dynamic record instead',
+            lenient,
+        )
+
+    def test_extra_changes_divergent_alias_ttls(self):
+        provider = self._get_alias_provider()
+        provider._divergent_alias_ttls['unit.tests'].update({'', 'www'})
+
+        zone = Zone('unit.tests.', [])
+        root = self._alias(zone, '', [('A', self.FRONT_DOOR_ID)])
+        www = self._alias(zone, 'www', [('A', self.FRONT_DOOR_ID)])
+        other = self._alias(zone, 'other', [('A', self.FRONT_DOOR_ID)])
+        plain = Record.new(
+            zone, 'www', {'type': 'TXT', 'ttl': 60, 'value': 'x'}
+        )
+        for record in (root, www, other, plain):
+            zone.add_record(record)
+
+        # root is already changing, other isn't divergent
+        extra = provider._extra_changes(zone, zone, [Update(root, root)])
+        self.assertEqual(1, len(extra))
+        self.assertIsInstance(extra[0], Update)
+        self.assertIs(www, extra[0].new)
+        self.assertIs(www, extra[0].existing)
+
+        # nothing divergent
+        provider._divergent_alias_ttls.clear()
+        self.assertEqual([], provider._extra_changes(zone, zone, []))
+
+    def test_apply_alias_create_update_delete(self):
+        provider = self._get_alias_provider()
+        zone = zone_public
+        root = self._alias(
+            zone, '', [('A', self.FRONT_DOOR_ID), ('AAAA', self.FRONT_DOOR_ID)]
+        )
+
+        provider._apply_Create(Create(root))
+        self.assertEqual(
+            [
+                (
+                    '@',
+                    'A',
+                    RecordSet(
+                        ttl=300,
+                        target_resource=SubResource(id=self.FRONT_DOOR_ID),
+                    ),
+                ),
+                (
+                    '@',
+                    'AAAA',
+                    RecordSet(
+                        ttl=300,
+                        target_resource=SubResource(id=self.FRONT_DOOR_ID),
+                    ),
+                ),
+            ],
+            self._put_calls(provider),
+        )
+        create = provider.dns_client.record_sets.create_or_update
+        create.assert_called_with(
+            resource_group_name='mock_rg',
+            zone_name='unit.tests',
+            relative_record_set_name='@',
+            record_type='AAAA',
+            parameters=RecordSet(
+                ttl=300, target_resource=SubResource(id=self.FRONT_DOOR_ID)
+            ),
+        )
+
+        # update PUTs all of the (new) values
+        create.reset_mock()
+        www = self._alias(zone, 'www', [('CNAME', self.FRONT_DOOR_ID)])
+        www2 = self._alias(zone, 'www', [('CNAME', self.PUBLIC_IP_ID)], ttl=60)
+        provider._apply_Update(Update(www, www2))
+        self.assertEqual(
+            [
+                (
+                    'www',
+                    'CNAME',
+                    RecordSet(
+                        ttl=60,
+                        target_resource=SubResource(id=self.PUBLIC_IP_ID),
+                    ),
+                )
+            ],
+            self._put_calls(provider),
+        )
+        provider.dns_client.record_sets.delete.assert_not_called()
+
+        # delete removes all of the recordsets
+        provider._apply_Delete(Delete(root))
+        provider.dns_client.record_sets.delete.assert_has_calls(
+            [
+                call('mock_rg', 'unit.tests', '@', 'A'),
+                call('mock_rg', 'unit.tests', '@', 'AAAA'),
+            ]
+        )
+        # and doesn't touch traffic managers
+        provider._tm_client.profiles.delete.assert_not_called()
+
+    def _apply_changes(self, provider, changes, desired=None):
+        desired = desired or zone_public
+        provider.apply(Plan(desired, desired, changes, True))
+
+    def test_apply_plain_to_alias(self):
+        provider = self._get_alias_provider()
+        zone = zone_public
+        plain = Record.new(
+            zone, 'foo', {'type': 'A', 'ttl': 60, 'value': '1.2.3.4'}
+        )
+        alias = self._alias(zone, 'foo', [('A', self.FRONT_DOOR_ID)])
+
+        self._apply_changes(provider, [Delete(plain), Create(alias)])
+        # the A is replaced by the alias, never deleted
+        self.assertEqual([], self._delete_calls(provider))
+        self.assertEqual(
+            [('foo', 'A')], [(n, t) for n, t, _ in self._put_calls(provider)]
+        )
+
+    def test_apply_alias_to_plain(self):
+        provider = self._get_alias_provider()
+        zone = zone_public
+        alias = self._alias(
+            zone,
+            'foo',
+            [('A', self.FRONT_DOOR_ID), ('AAAA', self.FRONT_DOOR_ID)],
+        )
+        plain = Record.new(
+            zone, 'foo', {'type': 'A', 'ttl': 60, 'value': '1.2.3.4'}
+        )
+
+        self._apply_changes(provider, [Delete(alias), Create(plain)])
+        # only the AAAA, which nothing replaces, is deleted
+        self.assertEqual([('foo', 'AAAA')], self._delete_calls(provider))
+        puts = self._put_calls(provider)
+        self.assertEqual(1, len(puts))
+        self.assertEqual(('foo', 'A'), puts[0][:2])
+        self.assertEqual(
+            [ARecord(ipv4_address='1.2.3.4')], puts[0][2]['a_records']
+        )
+
+        # alias CNAME to a plain A, the CNAME has to go first
+        provider = self._get_alias_provider()
+        alias = self._alias(zone, 'foo', [('CNAME', self.FRONT_DOOR_ID)])
+        self._apply_changes(provider, [Create(plain), Delete(alias)])
+        self.assertEqual([('foo', 'CNAME')], self._delete_calls(provider))
+        self.assertEqual(
+            [('foo', 'A')], [(n, t) for n, t, _ in self._put_calls(provider)]
+        )
+
+    def test_apply_dynamic_to_alias(self):
+        provider, existing, record = self._get_dynamic_package()
+        provider.manage_aliases = True
+        provider._populate_traffic_managers()
+        profiles = self._get_tm_profiles(provider)
+
+        # the dynamic CNAME is replaced by a CNAME alias
+        alias = self._alias(existing, 'foo', [('CNAME', self.FRONT_DOOR_ID)])
+        desired = Zone('unit.tests.', [])
+        desired.add_record(alias)
+
+        tm_delete = provider._tm_client.profiles.delete
+        dns_create = provider.dns_client.record_sets.create_or_update
+        # the Traffic Managers must be cleaned up after the recordset is
+        # repointed
+        order = []
+        dns_create.side_effect = lambda **kwargs: order.append('put')
+        tm_delete.side_effect = lambda *args: order.append('tm-delete')
+
+        self._apply_changes(
+            provider, [Delete(record), Create(alias)], desired=desired
+        )
+        self.assertEqual([], self._delete_calls(provider))
+        self.assertEqual(
+            [('foo', 'CNAME')],
+            [(n, t) for n, t, _ in self._put_calls(provider)],
+        )
+        self.assertEqual(len(profiles), tm_delete.call_count)
+        self.assertEqual(['put'] + ['tm-delete'] * len(profiles), order)
+
+    def test_apply_dynamic_to_alias_keeps_active_profiles(self):
+        provider = self._get_alias_provider()
+        zone = Zone('unit.tests.', [])
+        dynamic_a = self._get_dynamic_A_record(zone)
+        dynamic_aaaa = self._get_dynamic_A_record(zone, _type='AAAA')
+        alias = self._alias(zone, 'foo', [('A', self.FRONT_DOOR_ID)])
+        desired = Zone('unit.tests.', [])
+        desired.add_record(alias)
+        desired.add_record(dynamic_aaaa)
+        # something unrelated at a different name
+        desired.add_record(
+            Record.new(
+                desired, 'bar', {'type': 'A', 'ttl': 60, 'value': '1.2.3.4'}
+            )
+        )
+
+        # existing dynamic A is replaced by an alias while a new dynamic AAAA
+        # at the same name reuses the profile names
+        self._apply_changes(
+            provider,
+            [Delete(dynamic_a), Create(alias), Create(dynamic_aaaa)],
+            desired=desired,
+        )
+        self.assertEqual([], self._delete_calls(provider))
+        self.assertEqual(
+            [('foo', 'A'), ('foo', 'AAAA')],
+            sorted((n, t) for n, t, _ in self._put_calls(provider)),
+        )
+        # the AAAA's freshly synced profiles weren't garbage collected
+        provider._tm_client.profiles.delete.assert_not_called()
+
+    def test_apply_alias_to_dynamic(self):
+        provider = self._get_alias_provider()
+        zone = Zone('unit.tests.', [])
+        dynamic = self._get_dynamic_A_record(zone)
+        alias = self._alias(zone, 'foo', [('A', self.FRONT_DOOR_ID)])
+
+        self._apply_changes(provider, [Delete(alias), Create(dynamic)])
+        self.assertEqual([], self._delete_calls(provider))
+        puts = self._put_calls(provider)
+        self.assertEqual(1, len(puts))
+        self.assertEqual(('foo', 'A'), puts[0][:2])
+        self.assertIn('target_resource', puts[0][2])
+        provider._tm_client.profiles.delete.assert_not_called()
+
+    def test_apply_alias_type_moves(self):
+        provider = self._get_alias_provider()
+        zone = zone_public
+        existing = self._alias(
+            zone,
+            'foo',
+            [('A', self.FRONT_DOOR_ID), ('AAAA', self.FRONT_DOOR_ID)],
+        )
+        new = self._alias(zone, 'foo', [('AAAA', self.FRONT_DOOR_ID)])
+        plain = Record.new(
+            zone, 'foo', {'type': 'A', 'ttl': 60, 'value': '1.2.3.4'}
+        )
+
+        # a plain A takes over the A the alias no longer has, it must not be
+        # deleted after it's created
+        self._apply_changes(provider, [Create(plain), Update(existing, new)])
+        self.assertEqual([], self._delete_calls(provider))
+        self.assertEqual(
+            [('foo', 'A'), ('foo', 'AAAA')],
+            sorted((n, t) for n, t, _ in self._put_calls(provider)),
+        )
+
+        # without anything taking over the A is deleted before the PUTs
+        provider = self._get_alias_provider()
+        order = []
+        provider.dns_client.record_sets.delete.side_effect = (
+            lambda *args: order.append(('delete', args[3]))
+        )
+        provider.dns_client.record_sets.create_or_update.side_effect = (
+            lambda **kwargs: order.append(('put', kwargs['record_type']))
+        )
+        self._apply_changes(provider, [Update(existing, new)])
+        self.assertEqual([('delete', 'A'), ('put', 'AAAA')], order)
+
+        # and the other way around, AAAA -> A with a plain AAAA going away
+        provider = self._get_alias_provider()
+        plain_aaaa = Record.new(
+            zone, 'foo', {'type': 'AAAA', 'ttl': 60, 'value': '::1'}
+        )
+        existing = self._alias(zone, 'foo', [('A', self.FRONT_DOOR_ID)])
+        new = self._alias(zone, 'foo', [('AAAA', self.FRONT_DOOR_ID)])
+        self._apply_changes(
+            provider, [Delete(plain_aaaa), Update(existing, new)]
+        )
+        # the old alias A goes, the AAAA is replaced
+        self.assertEqual([('foo', 'A')], self._delete_calls(provider))
+        self.assertEqual(
+            [('foo', 'AAAA')], [(n, t) for n, t, _ in self._put_calls(provider)]
+        )
+
+    def test_plan_and_apply_plain_to_alias(self):
+        provider = self._get_alias_provider()
+        provider._azure_zones.add('unit.tests')
+
+        recordSet = RecordSet(a_records=[ARecord(ipv4_address='1.2.3.4')])
+        recordSet.name, recordSet.ttl, recordSet.type = 'www', 300, 'A'
+        recordSet.target_resource = SubResource()
+        rs = [
+            recordSet,
+            self._alias_recordset('ip', 'A', self.PUBLIC_IP_ID, ttl=300),
+            self._alias_recordset('ip', 'AAAA', self.PUBLIC_IP_ID, ttl=60),
+        ]
+        record_list = provider.dns_client.record_sets.list_by_dns_zone
+        record_list.return_value = rs
+
+        desired = Zone('unit.tests.', [])
+        desired.add_record(
+            self._alias(desired, 'www', [('A', self.FRONT_DOOR_ID)])
+        )
+        # same values as existing, lowest ttl, but the AAAA's ttl is off
+        desired.add_record(
+            self._alias(
+                desired,
+                'ip',
+                [('A', self.PUBLIC_IP_ID.lower()), ('AAAA', self.PUBLIC_IP_ID)],
+                ttl=60,
+            )
+        )
+
+        plan = provider.plan(desired)
+        self.assertEqual(
+            [
+                ('Delete', 'www', 'A'),
+                ('Create', 'www', 'AzureProvider/ALIAS'),
+                ('Update', 'ip', 'AzureProvider/ALIAS'),
+            ],
+            [
+                (c.__class__.__name__, c.record.name, c.record._type)
+                for c in plan.changes
+            ],
+        )
+
+        provider.apply(plan)
+        self.assertEqual([], self._delete_calls(provider))
+        self.assertEqual(
+            [
+                ('ip', 'A', 60, self.PUBLIC_IP_ID.lower()),
+                ('ip', 'AAAA', 60, self.PUBLIC_IP_ID),
+                ('www', 'A', 300, self.FRONT_DOOR_ID),
+            ],
+            sorted(
+                (n, t, p.ttl, p.target_resource.id)
+                for n, t, p in self._put_calls(provider)
+            ),
+        )
 
     def test_check_zone_create_caches_root_ns(self):
         provider = self._get_provider()
