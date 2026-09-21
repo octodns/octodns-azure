@@ -315,6 +315,13 @@ def _parse_azure_type(string):
     return string.split('/')[-1]
 
 
+_TM_PROFILE_PROVIDER = '/providers/microsoft.network/trafficmanagerprofiles/'
+
+
+def _is_tm_profile_id(resource_id):
+    return _TM_PROFILE_PROVIDER in resource_id.lower()
+
+
 def _root_traffic_manager_name(record):
     # ATM names can only have letters, numbers and hyphens
     # replace dots with double hyphens to ensure unique mapping,
@@ -782,6 +789,9 @@ class AzureBaseProvider(BaseProvider):
                     continue
 
                 record = self._populate_record(zone, azrecord, lenient)
+                if record is None:
+                    # subclass told us to skip this recordset
+                    continue
                 zone.add_record(record, lenient=lenient)
 
                 if record._type == 'NS' and record.name == '':
@@ -989,6 +999,11 @@ class AzureProvider(AzureBaseProvider):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.__tm_client = None
+        # zone_name (no trailing dot) -> {(record_name, type): target_id} for
+        # alias recordsets we found during populate that point at something
+        # other than a Traffic Manager profile; we don't support those, see
+        # _populate_record and _process_desired_zone below.
+        self._unsupported_aliases = defaultdict(dict)
 
     @property
     def dns_client(self):
@@ -1063,6 +1078,38 @@ class AzureProvider(AzureBaseProvider):
     def _get_tm_for_dynamic_record(self, record):
         name = _root_traffic_manager_name(record)
         return self._get_tm_profile_by_name(name)
+
+    def populate(self, zone, target=False, lenient=False):
+        # clear out anything we noticed last time around so that a record
+        # that's since been fixed or removed in Azure doesn't linger here
+        self._unsupported_aliases.pop(zone.name[:-1], None)
+        return super().populate(zone, target=target, lenient=lenient)
+
+    def _populate_record(self, zone, azrecord, lenient=False):
+        typ = _parse_azure_type(azrecord.type)
+        if typ in ('A', 'AAAA', 'CNAME'):
+            target_id = getattr(azrecord.target_resource, 'id', None)
+            if target_id and not _is_tm_profile_id(target_id):
+                # this is an alias to something other than a Traffic Manager
+                # profile, e.g. a Front Door endpoint; octoDNS only knows how
+                # to manage Traffic Manager backed aliases, so we skip it and
+                # leave it unmanaged, but remember it so that we can error out
+                # if the desired config would otherwise try to overwrite it.
+                record_name = azrecord.name if azrecord.name != '@' else ''
+                self.log.warning(
+                    '_populate_record: %s %s is an Azure alias to %s, '
+                    'octoDNS does not support Azure alias records to '
+                    'non-Traffic Manager resources; skipping it',
+                    azrecord.fqdn,
+                    typ,
+                    target_id,
+                )
+                self._unsupported_aliases[zone.name[:-1]][
+                    (record_name, typ)
+                ] = target_id
+                return None
+
+        return super()._populate_record(zone, azrecord, lenient=lenient)
 
     def _data_for_A(self, azrecord):
         if azrecord.a_records is None:
@@ -1256,6 +1303,12 @@ class AzureProvider(AzureBaseProvider):
 
         # top level profile
         root_profile = self._get_tm_profile_by_id(azrecord.target_resource.id)
+        if root_profile is None:
+            raise AzureException(
+                f'Traffic Manager profile {azrecord.target_resource.id} for '
+                f'{azrecord.fqdn} not found in resource group '
+                f'{self._resource_group}'
+            )
 
         rule_map = {}
         if root_profile.traffic_routing_method == 'Subnet':
@@ -1348,6 +1401,19 @@ class AzureProvider(AzureBaseProvider):
         return record, modified
 
     def _process_desired_zone(self, desired):
+        unsupported_aliases = self._unsupported_aliases.get(
+            desired.name[:-1], {}
+        )
+        for record in desired.records:
+            key = (record.name, record._type)
+            if key in unsupported_aliases:
+                target_id = unsupported_aliases[key]
+                raise AzureException(
+                    f'{record.fqdn} {record._type} is an Azure alias to '
+                    f'{target_id}, which octoDNS does not support; delete '
+                    'the alias in Azure or remove the record from the config'
+                )
+
         for record in desired.records:
             protocol = record.healthcheck_protocol
             if record._type == 'NS' and record.name == '':
