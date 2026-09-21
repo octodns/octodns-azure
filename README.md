@@ -129,7 +129,8 @@ www:
 * `target-resource` is the Azure resource id of the target and is compared case-insensitively. Traffic Manager profiles aren't allowed, use dynamic records for those.
 * Azure record sets each have their own TTL; if the alias record sets at a name differ the lowest is used and they'll all be updated to the configured `ttl` on the next sync.
 * Switching a name between a regular/dynamic record and an alias replaces the Azure record set in place rather than deleting and re-creating it.
-* When the target of an alias to another record set in the same zone is deleted Azure removes the alias as well.
+* When the target of an alias to another record set in the same zone is deleted Azure removes the alias as well. Azure also rejects an alias whose target record set doesn't exist yet, so creating both in the same apply may fail; re-running the sync once the target exists resolves it.
+* `AzureProvider/ALIAS` requires octoDNS 1.21.1 or newer.
 * `AzureProvider/ALIAS` is only supported by `AzureProvider` (not `AzurePrivateProvider`). `YamlProvider` can store them, other providers treat them as an unsupported type. As with other provider-specific types the type is only registered when `octodns_azure` is loaded, i.e. when an Azure provider is part of the octoDNS config.
 
 When `manage_aliases` is off (the default) such alias records are left alone: they're skipped, with a warning, when populating (including by `octodns-dump`), it's an error for the config to contain a record that would overwrite one, and it's an error for the config to contain `AzureProvider/ALIAS` records.

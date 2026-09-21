@@ -4751,7 +4751,7 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(len(profiles), tm_delete.call_count)
         self.assertEqual(['put'] + ['tm-delete'] * len(profiles), order)
 
-    def test_apply_dynamic_to_alias_keeps_active_profiles(self):
+    def test_apply_dynamic_to_alias_only_gcs_its_profiles(self):
         provider = self._get_alias_provider()
         zone = Zone('unit.tests.', [])
         dynamic_a = self._get_dynamic_A_record(zone)
@@ -4760,27 +4760,37 @@ class TestAzureDnsProvider(TestCase):
         desired = Zone('unit.tests.', [])
         desired.add_record(alias)
         desired.add_record(dynamic_aaaa)
-        # something unrelated at a different name
-        desired.add_record(
-            Record.new(
-                desired, 'bar', {'type': 'A', 'ttl': 60, 'value': '1.2.3.4'}
-            )
-        )
 
-        # existing dynamic A is replaced by an alias while a new dynamic AAAA
-        # at the same name reuses the profile names
+        # existing profiles for both the dynamic A & AAAA at foo, profile
+        # names include the type so they don't overlap
+        for name in (
+            'foo--unit--tests-A',
+            'foo--unit--tests-A-pool-one',
+            'foo--unit--tests-AAAA',
+            'foo--unit--tests-AAAA-pool-one',
+        ):
+            profile_id = provider._profile_name_to_id(name)
+            provider._traffic_managers[profile_id] = Profile(
+                id=profile_id, name=name, endpoints=[]
+            )
+
+        # the dynamic A is replaced by an alias, the dynamic AAAA stays
         self._apply_changes(
-            provider,
-            [Delete(dynamic_a), Create(alias), Create(dynamic_aaaa)],
-            desired=desired,
+            provider, [Delete(dynamic_a), Create(alias)], desired=desired
         )
         self.assertEqual([], self._delete_calls(provider))
         self.assertEqual(
-            [('foo', 'A'), ('foo', 'AAAA')],
-            sorted((n, t) for n, t, _ in self._put_calls(provider)),
+            [('foo', 'A')], [(n, t) for n, t, _ in self._put_calls(provider)]
         )
-        # the AAAA's freshly synced profiles weren't garbage collected
-        provider._tm_client.profiles.delete.assert_not_called()
+        # only the A's profiles were garbage collected
+        tm_delete = provider._tm_client.profiles.delete
+        self.assertEqual(
+            [
+                call('mock_rg', 'foo--unit--tests-A'),
+                call('mock_rg', 'foo--unit--tests-A-pool-one'),
+            ],
+            sorted(tm_delete.call_args_list, key=lambda c: c.args[1]),
+        )
 
     def test_apply_alias_to_dynamic(self):
         provider = self._get_alias_provider()

@@ -256,6 +256,26 @@ class TestAzureAliasRecord(TestCase):
             ),
         )
 
+        # the subscriptions prefix is case-insensitive, ARM ids can come back
+        # as /Subscriptions/...
+        record = Record.new(
+            self.zone,
+            'www',
+            {
+                'type': 'AzureProvider/ALIAS',
+                'ttl': 300,
+                'value': {
+                    'type': 'A',
+                    'target-resource': FRONT_DOOR_ID.replace(
+                        '/subscriptions/', '/Subscriptions/'
+                    ),
+                },
+            },
+        )
+        self.assertTrue(
+            record.values[0].target_resource.startswith('/Subscriptions/')
+        )
+
         # a CNAME away from the root is fine
         record = Record.new(
             self.zone,

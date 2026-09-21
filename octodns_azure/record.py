@@ -45,7 +45,7 @@ class _AzureAliasValueValidator(ValueValidator):
             target = value.get('target-resource')
             if not target:
                 reasons.append(reason('missing target-resource'))
-            elif not isinstance(target, str) or not target.startswith(
+            elif not isinstance(target, str) or not target.lower().startswith(
                 '/subscriptions/'
             ):
                 reasons.append(

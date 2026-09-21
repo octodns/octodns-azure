@@ -2203,18 +2203,6 @@ class AzureProvider(AzureBaseProvider):
                 typ,
             )
 
-    def _gc_replaced_traffic_managers(self, record, desired):
-        # a dynamic record's recordset was replaced rather than deleted, clean
-        # up its Traffic Manager profiles, leaving any that a dynamic record
-        # now at the same name is using since they share profile names
-        active = set()
-        for other in desired.records:
-            if other.name == record.name and getattr(other, 'dynamic', False):
-                active |= set(
-                    p.name for p in self._generate_traffic_managers(other)
-                )
-        self._traffic_managers_gc(record, active)
-
     def _apply(self, plan):
         desired = plan.desired
         changes = plan.changes
@@ -2279,9 +2267,12 @@ class AzureProvider(AzureBaseProvider):
             getattr(self, f'_apply_{class_name}')(change)
 
         # now that their recordsets point elsewhere we can clean up the
-        # Traffic Managers of dynamic records that were replaced
+        # Traffic Managers of dynamic records that were replaced. Profile
+        # names include the record's type so nothing else in the desired
+        # state can be using them; a dynamic record of the same name & type
+        # would have been an Update rather than a Delete.
         for record in replaced:
-            self._gc_replaced_traffic_managers(record, desired)
+            self._traffic_managers_gc(record, set())
 
     def _delete_record(
         self, resource_group, zone_name, relative_record_set_name, record_type
