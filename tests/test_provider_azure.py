@@ -4312,12 +4312,16 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(0.5, policy.backoff_factor)
         self.assertEqual(90, policy.backoff_max)
 
+    @patch('octodns_azure.TrafficManagerManagementClient')
     @patch('octodns_azure.DnsManagementClient')
     @patch('octodns_azure.ClientSecretCredential')
-    def test_http_logging_level_suppressed(self, mock_css, mock_client):
+    def test_http_logging_level_suppressed(
+        self, mock_css, mock_client, mock_tm_client
+    ):
         # Azure's HttpLoggingPolicy is very noisy at its default level,
-        # INFO, so we ask it to log at DEBUG instead, both for the
-        # credential's own (token) requests and for the dns client's.
+        # INFO, so we ask it to log at DEBUG instead, for the credential's
+        # own (token) requests, and for the dns and traffic manager
+        # clients.
         provider = AzureProvider(
             'mock_id',
             'mock_sub',
@@ -4334,6 +4338,11 @@ class TestAzureDnsProvider(TestCase):
         provider.dns_client
         self.assertEqual(
             DEBUG, mock_client.call_args.kwargs['http_logging_level']
+        )
+
+        provider._tm_client
+        self.assertEqual(
+            DEBUG, mock_tm_client.call_args.kwargs['http_logging_level']
         )
 
 

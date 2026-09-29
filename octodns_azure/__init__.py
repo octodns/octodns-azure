@@ -1009,6 +1009,7 @@ class AzureProvider(AzureBaseProvider):
                 credential=self._client_credential,
                 subscription_id=self._client_subscription_id,
                 base_url=self._base_url,
+                http_logging_level=DEBUG,
             )
         return self.__tm_client
 
