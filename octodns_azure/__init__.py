@@ -668,20 +668,16 @@ class AzureBaseProvider(BaseProvider):
     def _client_credential(self):
         if self.__client_credential is None:
             # Azure's HttpLoggingPolicy spits out a lot of noisy request/
-            # response details at its default level, INFO. Rather than
-            # patching the logger itself, tell the policy to log at DEBUG
-            # instead via the `http_logging_level` kwarg it (and the
-            # clients below) accept, scoped to just our own client/
+            # response details at its default level, INFO. Tell it to log
+            # at DEBUG instead via the `http_logging_level` kwarg it (and
+            # the clients below) accept, scoped to just our own client/
             # credential instances.
-            logger_name = 'azure.core.pipeline.policies.http_logging_policy'
-            logger = getLogger(logger_name)
             if self._client_method == self.CREDENTIAL_METHOD_CLIENT_SECRET:
                 self.__client_credential = ClientSecretCredential(
                     client_id=self._client_client_id,
                     client_secret=self._client_key,
                     tenant_id=self._client_directory_id,
                     authority=self._authority,
-                    logger=logger,
                     http_logging_level=DEBUG,
                 )
             elif self._client_method == self.CREDENTIAL_METHOD_CLI:
