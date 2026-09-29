@@ -2,10 +2,14 @@
 #
 #
 
+from logging import DEBUG, INFO, getLogger
 from unittest import TestCase
 from unittest.mock import Mock, call, patch
 
 from azure.core.exceptions import ResourceNotFoundError
+from azure.core.pipeline import PipelineContext, PipelineRequest
+from azure.core.pipeline.policies import HttpLoggingPolicy
+from azure.core.pipeline.transport import HttpRequest
 from azure.identity import AzureCliCredential
 from azure.mgmt.dns.models import (
     AaaaRecord,
@@ -949,6 +953,43 @@ class Test_ProfileIsMatch(TestCase):
 
         self.assertFalse(is_match(wprofile(), wprofile(target='bar.unit')))
         self.assertFalse(is_match(wprofile(), wprofile(weight=3)))
+
+
+class TestAzureHttpLoggingSuppression(TestCase):
+    '''Exercises the real (unmocked) azure-core HttpLoggingPolicy to make
+    sure passing http_logging_level=DEBUG, as octodns_azure does for its
+    credential and dns clients, actually downgrades Azure's normally very
+    noisy per-request/response HTTP logging from INFO to DEBUG. This is
+    what regressed when azure-core >=1.40 stopped calling logger.info(...)
+    (which octodns_azure used to monkey-patch to logger.debug) in favor of
+    logger.log(self.http_logging_level, ...).
+    '''
+
+    def _on_request(self, logger):
+        policy = HttpLoggingPolicy(logger=logger, http_logging_level=DEBUG)
+        http_request = HttpRequest('GET', 'https://example.com/')
+        request = PipelineRequest(http_request, PipelineContext(None))
+        policy.on_request(request)
+
+    def test_downgraded_to_debug(self):
+        logger = getLogger('octodns_azure.tests.http_logging_policy.verbose')
+        logger.setLevel(DEBUG)
+
+        with self.assertLogs(logger, level=DEBUG) as cm:
+            self._on_request(logger)
+
+        self.assertTrue(cm.records)
+        self.assertTrue(all(r.levelno == DEBUG for r in cm.records))
+
+    def test_suppressed_at_default_verbosity(self):
+        # at a typical application's default verbosity, INFO, Azure's
+        # HTTP request/response logs should be silent once downgraded to
+        # DEBUG
+        logger = getLogger('octodns_azure.tests.http_logging_policy.quiet')
+        logger.setLevel(INFO)
+
+        with self.assertNoLogs(logger, level=INFO):
+            self._on_request(logger)
 
 
 class TestAzureDnsProvider(TestCase):
@@ -4271,6 +4312,30 @@ class TestAzureDnsProvider(TestCase):
         self.assertEqual(0.5, policy.backoff_factor)
         self.assertEqual(90, policy.backoff_max)
 
+    @patch('octodns_azure.DnsManagementClient')
+    @patch('octodns_azure.ClientSecretCredential')
+    def test_http_logging_level_suppressed(self, mock_css, mock_client):
+        # Azure's HttpLoggingPolicy is very noisy at its default level,
+        # INFO, so we ask it to log at DEBUG instead, both for the
+        # credential's own (token) requests and for the dns client's.
+        provider = AzureProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            strict_supports=False,
+        )
+
+        _ = provider._client_credential
+        self.assertEqual(DEBUG, mock_css.call_args.kwargs['http_logging_level'])
+
+        provider.dns_client
+        self.assertEqual(
+            DEBUG, mock_client.call_args.kwargs['http_logging_level']
+        )
+
 
 class TestPrivateAzureDnsProvider(TestCase):
     @patch('octodns_azure.PrivateDnsManagementClient')
@@ -4515,6 +4580,30 @@ class TestPrivateAzureDnsProvider(TestCase):
 
         # This should be returning two zones since two zones are the same
         self.assertEqual(len(provider._azure_zones), 2)
+
+    @patch('octodns_azure.PrivateDnsManagementClient')
+    @patch('octodns_azure.ClientSecretCredential')
+    def test_http_logging_level_suppressed(self, mock_css, mock_client):
+        # Azure's HttpLoggingPolicy is very noisy at its default level,
+        # INFO, so we ask it to log at DEBUG instead, both for the
+        # credential's own (token) requests and for the dns client's.
+        provider = AzurePrivateProvider(
+            'mock_id',
+            'mock_sub',
+            'mock_rg',
+            directory_id='mock_directory',
+            client_id='mock_client',
+            key='mock_key',
+            strict_supports=False,
+        )
+
+        _ = provider._client_credential
+        self.assertEqual(DEBUG, mock_css.call_args.kwargs['http_logging_level'])
+
+        provider.dns_client
+        self.assertEqual(
+            DEBUG, mock_client.call_args.kwargs['http_logging_level']
+        )
 
     def test_bad_zone_response(self):
         provider = self._get_provider()
