@@ -6,7 +6,7 @@ from collections import defaultdict
 from copy import deepcopy
 from functools import reduce
 from ipaddress import ip_address, ip_network
-from logging import getLogger
+from logging import DEBUG, getLogger
 
 from azure.core.exceptions import ResourceNotFoundError
 from azure.core.pipeline.policies import RetryPolicy
@@ -667,19 +667,18 @@ class AzureBaseProvider(BaseProvider):
     @property
     def _client_credential(self):
         if self.__client_credential is None:
-            # Azure's logger spits out a lot of debug messages at 'INFO'
-            # level, override it by re-assigning `info` method to `debug`
-            # (ugly hack until I find a better way)
-            logger_name = 'azure.core.pipeline.policies.http_logging_policy'
-            logger = getLogger(logger_name)
-            logger.info = logger.debug
+            # Azure's HttpLoggingPolicy spits out a lot of noisy request/
+            # response details at its default level, INFO. Tell it to log
+            # at DEBUG instead via the `http_logging_level` kwarg it (and
+            # the clients below) accept, scoped to just our own client/
+            # credential instances.
             if self._client_method == self.CREDENTIAL_METHOD_CLIENT_SECRET:
                 self.__client_credential = ClientSecretCredential(
                     client_id=self._client_client_id,
                     client_secret=self._client_key,
                     tenant_id=self._client_directory_id,
                     authority=self._authority,
-                    logger=logger,
+                    http_logging_level=DEBUG,
                 )
             elif self._client_method == self.CREDENTIAL_METHOD_CLI:
                 self.__client_credential = AzureCliCredential()
@@ -999,6 +998,7 @@ class AzureProvider(AzureBaseProvider):
                 subscription_id=self._client_subscription_id,
                 retry_policy=self._dns_client_retry_policy,
                 base_url=self._base_url,
+                http_logging_level=DEBUG,
             )
         return self._dns_client
 
@@ -1009,6 +1009,7 @@ class AzureProvider(AzureBaseProvider):
                 credential=self._client_credential,
                 subscription_id=self._client_subscription_id,
                 base_url=self._base_url,
+                http_logging_level=DEBUG,
             )
         return self.__tm_client
 
@@ -2027,6 +2028,7 @@ class AzurePrivateProvider(AzureBaseProvider):
                 credential_scopes=[self._base_url + "/.default"],
                 subscription_id=self._client_subscription_id,
                 base_url=self._base_url,
+                http_logging_level=DEBUG,
             )
         return self._dns_client
 
