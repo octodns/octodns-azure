@@ -1,3 +1,11 @@
+## 1.2.0 - 2026-10-17
+
+Minor:
+* Modernize packaging: move build metadata from setup.py into pyproject.toml, remove setup.py; require Python >=3.10 - [#127](https://github.com/octodns/octodns-azure/pull/127)
+
+Patch:
+* Fix Azure SDK HTTP logging suppression for azure-core >=1.40 - [#133](https://github.com/octodns/octodns-azure/pull/133)
+
 ## 1.1.1 - 2026-05-22
 
 Patch:
